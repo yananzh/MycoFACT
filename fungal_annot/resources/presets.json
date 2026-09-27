@@ -1,0 +1,95 @@
+{
+  "LSU": {
+    "kind": "rRNA", "transl_table": null,
+    "feature_types": ["gene", "rRNA"],
+    "aliases": ["28S", "28S rRNA", "LSU rRNA", "D1/D2", "large subunit ribosomal RNA"]
+  },
+  "SSU": {
+    "kind": "rRNA", "transl_table": null,
+    "feature_types": ["gene", "rRNA"],
+    "aliases": ["18S", "18S rRNA", "SSU rRNA", "small subunit ribosomal RNA"]
+  },
+  "mtLSU": {
+    "kind": "rRNA", "mito": true, "manual_confirm": true, "transl_table": null,
+    "feature_types": ["gene", "rRNA"],
+    "aliases": ["mt-rnl", "rnl", "mitochondrial large subunit ribosomal RNA"]
+  },
+  "mtSSU": {
+    "kind": "rRNA", "mito": true, "manual_confirm": true, "transl_table": null,
+    "feature_types": ["gene", "rRNA"],
+    "aliases": ["mt-rns", "rns", "mitochondrial small subunit ribosomal RNA"]
+  },
+  "tef1": {
+    "kind": "CDS", "transl_table": 1,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["TEF1", "TEF1-alpha", "EF1A", "EF-1 alpha", "EF1-alpha",
+                "translation elongation factor 1-alpha", "translation elongation factor 1 alpha"]
+  },
+  "rpb1": {
+    "kind": "CDS", "transl_table": 1,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["RPB1", "RNA polymerase II largest subunit", "RNA polymerase II subunit 1"]
+  },
+  "rpb2": {
+    "kind": "CDS", "transl_table": 1,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["RPB2", "RNA polymerase II second largest subunit", "RNA polymerase II subunit 2"]
+  },
+  "tub2": {
+    "kind": "CDS", "transl_table": 1,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["TUB2", "benA", "beta-tubulin", "β-tubulin", "BETA-TUBULIN"]
+  },
+  "act": {
+    "kind": "CDS", "transl_table": 1,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["ACT", "ACT1", "actin"]
+  },
+  "cal": {
+    "kind": "CDS", "transl_table": 1,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["CAL", "calmodulin"]
+  },
+  "cox1": {
+    "kind": "CDS", "mito": true, "manual_confirm": true, "transl_table": 4,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["COI", "COXI", "MT-CO1", "CO1",
+                "cytochrome oxidase subunit 1", "cytochrome c oxidase subunit I",
+                "cytochrome c oxidase subunit 1"]
+  },
+  "cob": {
+    "kind": "CDS", "mito": true, "manual_confirm": true, "transl_table": 4,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["cytb", "cyt b", "CYTB", "MT-COB", "apocytochrome b", "cytochrome b"]
+  },
+  "nad1": {
+    "kind": "CDS", "mito": true, "manual_confirm": true, "transl_table": 4,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["ND1", "NAD1", "MT-ND1", "NADH dehydrogenase subunit 1"]
+  },
+  "nad2": {
+    "kind": "CDS", "mito": true, "manual_confirm": true, "transl_table": 4,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["ND2", "NAD2", "MT-ND2", "NADH dehydrogenase subunit 2"]
+  },
+  "nad4": {
+    "kind": "CDS", "mito": true, "manual_confirm": true, "transl_table": 4,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["ND4", "NAD4", "MT-ND4", "NADH dehydrogenase subunit 4"]
+  },
+  "nad5": {
+    "kind": "CDS", "mito": true, "manual_confirm": true, "transl_table": 4,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["ND5", "NAD5", "MT-ND5", "NADH dehydrogenase subunit 5"]
+  },
+  "atp6": {
+    "kind": "CDS", "mito": true, "manual_confirm": true, "transl_table": 4,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["ATP6", "MT-ATP6", "ATP synthase subunit 6", "ATPase subunit 6"]
+  },
+  "rps3": {
+    "kind": "CDS", "mito": true, "manual_confirm": true, "transl_table": 4,
+    "feature_types": ["gene", "CDS", "intron", "exon"],
+    "aliases": ["RPS3", "ribosomal protein S3"]
+  }
+}

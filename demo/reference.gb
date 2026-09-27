@@ -1,0 +1,67 @@
+LOCUS       MZ123456                2000 bp    DNA              PLN 01-JAN-1980
+DEFINITION  Fusarium solani isolate CBS 123456 tef1 gene, partial cds.
+ACCESSION   MZ123456
+VERSION     MZ123456.1
+KEYWORDS    .
+SOURCE      Fusarium solani
+  ORGANISM  Fusarium solani
+            .
+FEATURES             Location/Qualifiers
+     source          1..2000
+                     /organism="Fusarium solani"
+                     /mol_type="genomic DNA"
+                     /strain="CBS 123456"
+                     /country="China: Beijing"
+                     /collection_date="2020-May"
+     gene            201..1149
+                     /gene="tef1"
+     CDS             join(201..600,701..1149)
+                     /gene="tef1"
+                     /product="translation elongation factor 1-alpha"
+                     /note="partial cds"
+                     /protein_id="QWX12345.1"
+                     /locus_tag="FSOL_0001"
+                     /db_xref="GeneID:888888"
+                     /transl_table=1
+                     /translation="MRARSPALATTPLGPARRAGALRPTAGSSTPTTRPGPLAGRALAT
+                     GLSAATTSGTALEATPTGRSLRTRTRTGGAEGATGLRTERGTAALRATARRPSALTTTE
+                     TTRTRAAGRESAPEEGSTSRGERSTPRTATARPGGAEGRRRAARRLGARLGERTSRGAA
+                     AAGSGPRTAGGPARLTTTTAELTSSEPRSLRRRRARSRPGAGRAATTPAPTALATTPAG
+                     TRASGTTTRAARRRRGAAAETEGREALPGLTAELPLGSAEGLTATGLLLTSGTGGREGG
+                     L"
+ORIGIN
+        1 aagcccaata aaccactctg actggccgaa tagggatata ggcaacgaca tgtgcggcga
+       61 cccttgcgac agtgacgctt tcgccgttgc ctaaacctat ttgaaggagt ctagcagccg
+      121 cagtaaggca caatacctcg tccgtgttac cagaccaaac aagacgtcct cttcaatgtt
+      181 taaatgaccc tctcgtcata atgcgcgcca ggagcccggc gctcgcgacg accccgctcg
+      241 gcccggcgag gagggcgggc gcgctcaggc cgaccgcggg cagcagcacc ccgaccacca
+      301 ggccgggccc gctcgccggg agggccctcg cgaccgggct cagcgccgcg accaccagcg
+      361 gcacggcgct cgaggcgacc ccgaccggcc gcagcctcag gacgcgcacc cgcacggggg
+      421 gcgccgaggg cgcgaccggg ctccgcacgg agcgcgggac cgcggcgctc agggccacgg
+      481 cccgcaggcc gagcgcgctc accacgacgg agacgacccg cacccgcgcg gcggggcgcg
+      541 agagcgcgcc ggaggagggg agcaccagcc gcggggagag gagcacgccg cgcacggcca
+      601 agctcggtgt ggtgggcacg accctggacg cgcgacgaag ctaagtttgc agtaattaac
+      661 cgacatcttt gtgaaccgac ccacatttga cggtacgcta ccgcgcgccc gggcggggcc
+      721 gagggcagga ggcgcgcggc ccgcaggctc ggggccaggc tcggggagag gacgagcagg
+      781 ggcgccgcgg ccgccggcag cggcccgcgc accgccgggg ggccggccag gctcacgacc
+      841 accacggccg agctcaccag cagcgagccg cgcagcctca ggaggaggag ggcgcgcagc
+      901 aggccgggcg cgggccgcgc cgcgacgacc ccggcgccga ccgccctcgc gacgaccccg
+      961 gcgggcacca gggccagcgg gacgaccacg cgcgcggcgc gccgccgccg cggggcggcc
+     1021 gcggagacgg aggggcgcga ggccctcccg ggcctcacgg ccgagctccc gctcgggagc
+     1081 gcggaggggc tcacggccac gggcctcctc ctcacgagcg gcaccggcgg cagggagggc
+     1141 ggcctctaat gcagtagtga ctaacgccgg gaattcctcg atatatagtt tgatagctga
+     1201 tacttatggc gcaacggcca cgcccacttt ggctattgga gagttaagga attatcgtca
+     1261 tagacacttc gggttgagag atggcgacgg tcagtgcatg aggccgtccc cagaagctcc
+     1321 cctatgctgt ccgtcgttgt tcccgatgaa gacgtctact gatatgctag cagagccagt
+     1381 cttaaagcct agcgaactta ataccgtagc tcagaattat ggagagcagc aggcttccat
+     1441 agcacaggtt gacggaggag ttttgcttgg atatcggaag ggttctgtag tgaatgcact
+     1501 acacggtact ggtacgtggc aacttaggtc gtcacatcta ggaggccgca ccctaggtca
+     1561 agttttacga ttgccctaac gccgcggagc gcgacccgaa aagctatggt ctgtaacttt
+     1621 tcgcgggtcg agctagtcca agttccggcc tttgtaattc cgaagttgaa tcggtgatac
+     1681 ggattgacat gggcctaaac gttccggctg gtgtaggatg atgcatctcc aacatgtctc
+     1741 ttaccgttgc tgggtccggc ggctgtggga ttgcgagagt gtccggcacc accaatgtac
+     1801 actttcggga acactcattc gaagaggttc tgcagctgca ggccttgata cctgcagtct
+     1861 gggaggcaat gctgaggccc tctgttccat gaaacccgta ctatatctta tgatgacaat
+     1921 gaaatagtcc tgttttacga ctccaagttt cctgcgcaat accaaataca ttccacgcgg
+     1981 cgcctggact tagtgttcgt
+//
