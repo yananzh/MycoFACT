@@ -403,8 +403,9 @@ class PageReview(QWidget):
         issues = validate(s, features, res.detail.mapping, res.detail.ref_features,
                           res.detail.ref_seq, res.detail.preset, self.win.make_config())
         res.features = features
-        res.issues = issues
-        res.status = status_of(issues)
+        # 重验只替换 validate() 的输出；管线早期/迁移期的提示（base_issues）原样保留
+        res.issues = list(res.detail.base_issues) + issues
+        res.status = status_of(res.issues)
         res.tbl_text = write_tbl(features, sid)
         self._load_issues(sid)
         self._refresh_seq_row(sid)
@@ -422,8 +423,8 @@ class PageReview(QWidget):
                 continue
             issues = validate(s, res.features, res.detail.mapping, res.detail.ref_features,
                               res.detail.ref_seq, res.detail.preset, self.win.make_config())
-            res.issues = issues
-            res.status = status_of(issues)
+            res.issues = list(res.detail.base_issues) + issues
+            res.status = status_of(res.issues)
             res.tbl_text = write_tbl(res.features, s.seq_id)
             n += 1
         self.refresh()

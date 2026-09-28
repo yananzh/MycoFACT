@@ -40,6 +40,9 @@ class AnnotateDetail:
     preset: object = None
     ref_len: int = 0                                  # 参考全长（参考 feature table 展示用）
     ref_source_quals: dict = field(default_factory=dict)  # 参考 source 修饰符（只读展示）
+    # 管线早期（gene_type 自动判定等）与迁移期（exon_outside_aligned 等）的提示：
+    # 重验只替换 validate() 的输出，这部分必须原样保留，否则重查后 warning 凭空消失
+    base_issues: list = field(default_factory=list)
 
 
 @dataclass
@@ -186,13 +189,15 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
         v_issues = validate(seq_input, features, mapping, ref_features, ref_seq,
                             preset, cfg)
         res.features = features
-        res.issues = res.issues + outcome.issues + v_issues   # 累加：勿覆盖自动判定/人工确认等早期提示
+        base_issues = res.issues + outcome.issues   # 早期提示 + 迁移提示：重验时保留
+        res.issues = base_issues + v_issues
         res.status = status_of(res.issues)
         src_feat = next((f for f in rec.features if f.type == "source"), None)
         res.detail = AnnotateDetail(
             mapping=mapping, ref_features=ref_features, ref_seq=ref_seq, preset=preset,
             ref_len=len(ref_seq),
-            ref_source_quals=dict(src_feat.qualifiers) if src_feat else {})
+            ref_source_quals=dict(src_feat.qualifiers) if src_feat else {},
+            base_issues=base_issues)
 
         # ---- 5. 导出文本 ----
         res.tbl_text = write_tbl(features, seq_input.seq_id)

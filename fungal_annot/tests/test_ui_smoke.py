@@ -862,3 +862,38 @@ def test_review_issues_hidden_when_clean(window, ref_record_seq, ref_gb_text, mo
     page.load_result("g1")
     assert not page.lbl_issues.isVisibleTo(page)
     assert not page.issue_list.isVisibleTo(page)
+
+
+def test_recheck_preserves_pipeline_issues(window, ref_record_seq, ref_gb_text):
+    """重验只替换 validate() 的输出：管线早期/迁移期提示（base_issues）不得丢失，
+    否则初次注释的 warning 在 Re-check all / 自动重验后凭空消失、黄变绿。"""
+    from fungal_annot.core.models import Issue, SeqInput
+    from fungal_annot.services.pipeline import annotate_sequence
+
+    seq, _ = ref_record_seq
+    window.add_sequence(SeqInput(seq_id="b1", seq=seq[300:1600], gene_type="tef1",
+                                 source_qualifiers={"organism": "F. t", "country": "China"}))
+    res = annotate_sequence(window.sequences[0], window.make_config(),
+                            reference_gb_text=ref_gb_text)
+    window.results["b1"] = res
+    # 模拟迁移期 warning（正常由 transfer_features 产生并进入 base_issues）
+    transfer_issue = Issue("warning", "exon_outside_aligned",
+                           "CDS: 1 segment(s) outside the query-covered region")
+    res.detail.base_issues = list(res.detail.base_issues) + [transfer_issue]
+    res.issues = list(res.detail.base_issues) + list(res.issues)
+    res.status = "yellow"
+
+    page = window.page_review
+    page.refresh()
+    page.current = "b1"
+    page.load_result("b1")
+    page._recheck_all()
+    codes = {i.code for i in window.results["b1"].issues}
+    assert "exon_outside_aligned" in codes            # 重查后仍在
+    assert window.results["b1"].status == "yellow"    # 不会黄变绿
+
+    # 自动重验（编辑路径）同样保留
+    page.feature_table.item(0, 3).setText(page.feature_table.item(0, 3).text() + " ")
+    page._auto_revalidate()
+    codes = {i.code for i in window.results["b1"].issues}
+    assert "exon_outside_aligned" in codes
