@@ -149,8 +149,22 @@ def test_import_and_remove(window):
     assert window.sequences == []
 
 
-def test_offline_annotate_and_review(window, ref_record_seq, ref_gb_text):
-    """离线参考 → 注释 → P4 表格回读 → 重验状态不变。"""
+def test_gui_has_no_offline_entry(window):
+    """验收：GUI 无任何本地参考入口（离线仅 CLI --ref-gb）。"""
+    from fungal_annot.core.models import SeqInput
+
+    assert not hasattr(window, "local_ref_text")
+    assert not hasattr(window, "local_ref_name")
+    assert not hasattr(window, "load_local_reference")
+    assert not hasattr(window.page_reference, "lbl_offline")
+
+    window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 100, gene_type="tef1"))
+    window.page_reference.refresh()
+    assert not window.page_reference.b_annotate.isEnabled()   # 无 hits → 不就绪
+
+
+def test_annotate_and_review(window, ref_record_seq, ref_gb_text):
+    """参考下载 → 注释 → P4 表格回读 → 重验状态不变。"""
     from fungal_annot.core.models import SeqInput
     from fungal_annot.services.pipeline import annotate_sequence
 
@@ -159,7 +173,6 @@ def test_offline_annotate_and_review(window, ref_record_seq, ref_gb_text):
     window.add_sequence(SeqInput(seq_id="u1", seq=q, gene_type="tef1",
                                  source_qualifiers={"organism": "Fusarium testicum",
                                                     "country": "China"}))
-    window.local_ref_text = ref_gb_text
     res = annotate_sequence(window.sequences[0], window.make_config(),
                             reference_gb_text=ref_gb_text)
     window.results["u1"] = res
@@ -185,7 +198,6 @@ def test_review_edit_revalidate_detects_error(window, ref_record_seq, ref_gb_tex
     window.add_sequence(SeqInput(seq_id="u2", seq=q, gene_type="tef1",
                                  source_qualifiers={"organism": "Fusarium testicum",
                                                     "country": "China"}))
-    window.local_ref_text = ref_gb_text
     res = annotate_sequence(window.sequences[0], window.make_config(),
                             reference_gb_text=ref_gb_text)
     window.results["u2"] = res
@@ -438,25 +450,29 @@ def test_reference_row_radio_default_and_pick(window):
     assert window.selected_ref["r1"] == "AA000001"
 
 
-def test_start_annotation_button_flow(qtbot, window, ref_record_seq, ref_gb_text):
-    """§8 M4/M5 验收：点击 Start Annotation（真实按钮处理器）→ 后台注释 →
-    结果落盘 → 自动跳转审核页。回归点：曾因 _Worker 改名漏改导致点击即崩。"""
+def test_start_annotation_button_flow(qtbot, window, ref_record_seq, ref_gb_text, monkeypatch):
+    """§8 M4/M5 验收：命中路径 + 桩下载 → 真实按钮 → 自动进入审核页（索引 2）。"""
+    from fungal_annot.core.blast_runner import BlastHit
     from fungal_annot.core.models import SeqInput
 
     seq, _ = ref_record_seq
     window.add_sequence(SeqInput(seq_id="u1", seq=seq[300:1600], gene_type="tef1",
                                  source_qualifiers={"organism": "Fusarium testicum",
                                                     "country": "China"}))
-    window.local_ref_text = ref_gb_text
-    window.page_reference.refresh()
+    window.hits["u1"] = [BlastHit(accession="REF00001.1",
+                                  title="Fusarium referenceus tef1 gene",
+                                  pident=99.0, qcovs=100.0, subject_len=2000, flags={})]
+    monkeypatch.setattr("fungal_annot.services.pipeline.fetch_gb_text",
+                        lambda accession, **kw: (ref_gb_text, "full"))
+    window.page_reference.refresh()          # 自动选中推荐 → selected_ref 就绪
     window.page_reference.seq_list.setCurrentRow(0)
 
-    window.page_reference._start_annotate()      # 真实按钮处理器（含队列提交）
+    window.page_reference._start_annotate()  # 真实按钮处理器（含队列提交）
     assert window._annotate_pending == 1
     qtbot.waitUntil(lambda: "u1" in window.results, timeout=60000)
     qtbot.waitUntil(lambda: window._annotate_pending <= 0, timeout=60000)
     assert window.results["u1"].status in ("green", "yellow")
-    assert window.stack.currentIndex() == 3      # 完成后自动进入审核页
+    assert window.stack.currentIndex() == 2  # 完成后自动进入审核页（4 步向导）
 
 
 def test_alignment_view_text(window, ref_record_seq, ref_gb_text):

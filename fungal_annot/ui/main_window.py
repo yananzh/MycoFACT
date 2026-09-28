@@ -92,8 +92,6 @@ class MainWindow(QMainWindow):
         self.selected_ref: dict[str, str | None] = {}
         self.results: dict[str, object] = {}
         self.confirmed: dict[str, bool] = {}
-        self.local_ref_text: str | None = None
-        self.local_ref_name: str | None = None
         self.last_export_dir = os.path.join(os.path.expanduser("~"), "fungal_annot_out")
         self.exported = False
 
@@ -331,16 +329,6 @@ class MainWindow(QMainWindow):
             cache_dir=st.get("cache_dir") or None,
             auto_partial=bool(st.get("auto_partial", True)))
 
-    def load_local_reference(self, path: str):
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-        from ..core.gb_fetcher import parse_gb
-        rec = parse_gb(text)
-        if len(rec.seq) == 0:
-            raise ValueError("Reference record has no sequence")
-        self.local_ref_text = text
-        self.local_ref_name = os.path.basename(path)
-
     # ---- 后台任务 ----
     def start_blast(self):
         self.blast_queue.reset()
@@ -362,29 +350,25 @@ class MainWindow(QMainWindow):
     def start_annotation(self):
         self.annotate_queue.reset()
         self._annotate_pending = 0
-        offline = self.local_ref_text is not None
         for s in self.sequences:
-            ref_text = self.local_ref_text if offline else None
             acc = self.selected_ref.get(s.seq_id)
             hits = None
             ref_acc = None
-            if not offline:
-                if acc:
-                    # 行内单选存的是 accession：与已知命中匹配时按命中走
-                    # （保留 BLAST HSP 窗口截取信息），否则走直接下载通道（§6.1）
-                    hit = next((h for h in self.hits.get(s.seq_id, [])
-                                if h.accession == acc), None)
-                    if hit is not None:
-                        hits = [hit]
-                    else:
-                        ref_acc = acc
+            if acc:
+                # 行内单选存的是 accession：与已知命中匹配时按命中走
+                # （保留 BLAST HSP 窗口截取信息），否则走直接下载通道（§6.1）
+                hit = next((h for h in self.hits.get(s.seq_id, [])
+                            if h.accession == acc), None)
+                if hit is not None:
+                    hits = [hit]
                 else:
-                    self.log(f"[{s.seq_id}] no reference chosen - skipped")
-                    continue
+                    ref_acc = acc
+            else:
+                self.log(f"[{s.seq_id}] no reference chosen - skipped")
+                continue
             self.annotate_queue.submit(AnnotateWorker(s, self.make_config(),
                                                self.annotate_queue.signals,
                                                hits=hits,
-                                               reference_gb_text=ref_text,
                                                reference_accession=ref_acc))
             self._annotate_pending += 1
         if self._annotate_pending == 0:
@@ -442,10 +426,7 @@ class MainWindow(QMainWindow):
             return
         self.sequences.clear()
         self.reset_results()
-        self.local_ref_text = None
-        self.local_ref_name = None
         self.exported = False
-        self.page_import.refresh()
         self.page_import.refresh()
         self.go_page(0)
 

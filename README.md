@@ -6,7 +6,7 @@ marker）自动生成 NCBI 五列 feature table（.tbl）。设计文档见《�
 ## 当前状态
 
 - **M0–M2 已完成**：core/ 核心层全部模块 + CLI + 测试（计划 §8 里程碑 M0–M2）。
-- **M3–M5 已完成**：PyQt6 五页向导 UI（导入 / BLAST / 参考选择 / 注释审核 / 导出）、
+- **M3–M5 已完成**：PyQt6 四页向导 UI（导入&BLAST / 参考选择 / 注释审核 / 导出）、
   后台线程队列、项目 JSON 存取、审核编辑即时重验、table2asn 应用内预检入口。
 - 待办：在线 BLAST 对 NCBI 实网验证（建议按计划 M2 用实验室真实序列做黄金集）、
   table2asn CI 门禁（需 BankIt 模板 .sbt）、PyInstaller 打包（M6）。
@@ -17,11 +17,13 @@ marker）自动生成 NCBI 五列 feature table（.tbl）。设计文档见《�
 python main.py        # 启动 GUI
 ```
 
-五页流程：序列导入（拖入 / 浏览 / 粘贴 FASTA 或裸序列）→ BLAST / 离线参考 →
-参考选择（命中表行内单选 / 直接输入 accession）→ 注释审核（可编辑 feature 表格、即时重验、
-比对视图、红灯人工确认）→ 验证汇总与导出（.tbl + .fsa + 报告）。
+四步流程：序列导入并跑 BLAST（拖入 / 浏览 / 粘贴 FASTA 或裸序列；队列排空后自动进入
+下一步）→ 参考选择（命中表行内单选 / 直接输入 accession）→ 注释审核（可编辑 feature
+表格、即时重验、比对视图、红灯人工确认）→ 验证汇总与导出（.tbl + .fsa + 报告）。
 .tbl 为 BankIt 门户格式（只含 gene/CDS 等 feature，organism 在门户表单录入）。
-五个步骤以水平步骤条置于窗口顶部，点击已解锁的步骤即可跳转。
+四个步骤以水平步骤条置于窗口顶部，点击已解锁的步骤即可跳转。
+参考统一在线解析（命中 accession / 直接下载）；本地参考 GenBank 离线模式仅 CLI
+`--ref-gb` 保留。
 菜单栏 File 可保存/打开项目（JSON），随时关闭续作。
 
 ## 安装

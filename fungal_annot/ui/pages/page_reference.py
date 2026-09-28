@@ -27,9 +27,6 @@ class PageReference(QWidget):
         layout.addLayout(left, 1)
 
         right = QVBoxLayout()
-        self.lbl_offline = QLabel("")
-        self.lbl_offline.setWordWrap(True)
-        right.addWidget(self.lbl_offline)
         self.hit_table = HitTable()
         right.addWidget(self.hit_table, 1)
 
@@ -72,22 +69,17 @@ class PageReference(QWidget):
         for s in self.win.sequences:
             self.seq_list.addItem(f"{s.seq_id} ({s.gene_type or 'auto'})")
         self.seq_list.blockSignals(False)
-        offline = self.win.local_ref_text is not None
-        self.lbl_offline.setText("Offline mode: all sequences will use the local reference GenBank."
-                                 if offline else "")
         # 未做选择的序列自动取推荐（第一行）；此后 Start Annotation 全序列就绪才可点
         for s in self.win.sequences:
             hits = self.win.hits.get(s.seq_id)
             if hits and not self.win.selected_ref.get(s.seq_id):
                 self.win.selected_ref[s.seq_id] = hits[0].accession
-        ready = bool(self.win.sequences) and (
-            offline
-            or all(self.win.selected_ref.get(s.seq_id) for s in self.win.sequences))
+        ready = bool(self.win.sequences) and all(
+            self.win.selected_ref.get(s.seq_id) for s in self.win.sequences)
         self.b_annotate.setEnabled(ready)
         self.b_annotate.setToolTip("" if ready else
                                    "Every sequence needs a reference: pick one per row "
-                                   "(defaults to the recommended first hit), or load an "
-                                   "offline reference.")
+                                   "(defaults to the recommended first hit).")
         if self.seq_list.count():
             self.seq_list.setCurrentRow(0)
 
@@ -158,4 +150,4 @@ class PageReference(QWidget):
         self.b_cancel.setEnabled(False)
         self.progress.setValue(self.progress.maximum())
         if self.win.results:
-            self.win.go_page(3)      # 注释完成 → 进入审核页
+            self.win.go_page(2)      # 注释完成 → 进入审核页
