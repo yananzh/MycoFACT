@@ -1,2 +1,0 @@
-seq_id,length,gene_type,status,n_features,source,reference,region,orientation,pident,qcovs,nt_identity,issues
-PZ671317.1,653,tef1,yellow,2,blast,KP964900,full,reverse,98.93,100.0,0.9954,"[warning] exon_outside_aligned: CDS: 2 segment(s) outside the query-covered region (0 fully outside, clipped 2); treated as partial (partial amplicons are normal, not an error)"
