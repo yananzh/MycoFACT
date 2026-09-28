@@ -143,7 +143,7 @@ class ImportBox(QPlainTextEdit):
 
 
 class PageImport(QWidget):
-    title = "1. Import"
+    title = "1. Import & BLAST"
 
     def __init__(self, win):
         super().__init__()

@@ -20,7 +20,6 @@ from ..services.pipeline import PipelineConfig
 from ..services.project_store import (load_project, load_settings,
                                       save_project, save_settings)
 from ..services.worker import AnnotateWorker, BlastWorker, TaskQueue
-from .pages.page_blast import PageBlast
 from .pages.page_export import PageExport
 from .pages.page_import import PageImport
 from .pages.page_reference import PageReference
@@ -113,11 +112,10 @@ class MainWindow(QMainWindow):
         self.nav = StepBar()
         self.stack = QStackedWidget()
         self.page_import = PageImport(self)
-        self.page_blast = PageBlast(self)
         self.page_reference = PageReference(self)
         self.page_review = PageReview(self)
         self.page_export = PageExport(self)
-        for page in (self.page_import, self.page_blast, self.page_reference,
+        for page in (self.page_import, self.page_reference,
                      self.page_review, self.page_export):
             self.stack.addWidget(page)
             item = QListWidgetItem(page.title)
@@ -166,7 +164,7 @@ class MainWindow(QMainWindow):
 
     # ---- 页面导航 ----
     def go_page(self, index: int):
-        for page in (self.page_import, self.page_blast, self.page_reference,
+        for page in (self.page_import, self.page_reference,
                      self.page_review, self.page_export):
             page.refresh()
         self.stack.setCurrentIndex(index)
@@ -187,9 +185,9 @@ class MainWindow(QMainWindow):
         reviewed = annotated and all(
             res.status != "red" or self.confirmed.get(sid)
             for sid, res in self.results.items())
+        # 4 步：1 Import&BLAST 就绪（序列+hits）→ 2 已注释 → 3 已审核 → 4 已导出
         return [
-            len(self.sequences) > 0,
-            bool(self.hits) or self.local_ref_text is not None,
+            len(self.sequences) > 0 and bool(self.hits),
             annotated,
             reviewed,
             self.exported,
@@ -355,10 +353,11 @@ class MainWindow(QMainWindow):
             self._blast_pending += 1
         if self._blast_pending == 0:
             self.log("All sequences already have BLAST hits - continue to reference selection.")
-            self.page_blast.on_queue_finished()
+            self.page_import.on_queue_finished()
+            self.go_page(1)
         else:
-            self.page_blast.progress.setMaximum(self._blast_pending)
-            self.page_blast.progress.setValue(0)
+            self.page_import.progress.setMaximum(self._blast_pending)
+            self.page_import.progress.setValue(0)
 
     def start_annotation(self):
         self.annotate_queue.reset()
@@ -402,10 +401,11 @@ class MainWindow(QMainWindow):
         if isinstance(payload, list):
             self.hits[seq_id] = payload
             self._blast_pending -= 1
-            self.page_blast.progress.setValue(
-                self.page_blast.progress.maximum() - self._blast_pending)
+            self.page_import.progress.setValue(
+                self.page_import.progress.maximum() - self._blast_pending)
             if self._blast_pending <= 0:
-                self.page_blast.on_queue_finished()
+                self.page_import.on_queue_finished()
+                self.go_page(1)             # BLAST 排空 → 自动进入参考选择
                 self.page_reference.refresh()
         elif isinstance(payload, SeqResult):
             self.results[seq_id] = payload
@@ -420,10 +420,11 @@ class MainWindow(QMainWindow):
         if seq_id in [s.seq_id for s in self.sequences]:
             if self._blast_pending > 0:
                 self._blast_pending -= 1
-                self.page_blast.progress.setValue(
-                    self.page_blast.progress.maximum() - self._blast_pending)
+                self.page_import.progress.setValue(
+                    self.page_import.progress.maximum() - self._blast_pending)
                 if self._blast_pending <= 0:
-                    self.page_blast.on_queue_finished()
+                    self.page_import.on_queue_finished()
+                    self.go_page(1)         # 失败同样排空 → 跳转
             elif self._annotate_pending > 0:
                 self._annotate_pending -= 1
                 self.page_reference.progress.setValue(
@@ -445,7 +446,7 @@ class MainWindow(QMainWindow):
         self.local_ref_name = None
         self.exported = False
         self.page_import.refresh()
-        self.page_blast.refresh()
+        self.page_import.refresh()
         self.go_page(0)
 
     def _save_project(self):
@@ -484,5 +485,5 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.settings = dlg.values()
             save_settings(self.settings)
-            self.page_blast.refresh()
+            self.page_import.refresh()
             self.log("Settings saved.")

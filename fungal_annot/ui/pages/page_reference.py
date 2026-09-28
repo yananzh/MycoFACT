@@ -9,7 +9,7 @@ from ..widgets.hit_table import HitTable
 
 
 class PageReference(QWidget):
-    title = "3. Reference"      # 步骤条标签：水平等宽排布下需要短标签
+    title = "2. Reference"      # 步骤条标签：水平等宽排布下需要短标签
 
     def __init__(self, win):
         super().__init__()

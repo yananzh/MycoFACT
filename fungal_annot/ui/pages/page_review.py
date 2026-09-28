@@ -118,7 +118,7 @@ class AlignmentDialog(QDialog):
 
 
 class PageReview(QWidget):
-    title = "4. Review"         # 步骤条标签：水平等宽排布下需要短标签
+    title = "3. Review"         # 步骤条标签：水平等宽排布下需要短标签
 
     def __init__(self, win):
         super().__init__()

@@ -19,11 +19,11 @@ def window(qtbot):
     yield win
 
 
-def test_window_has_five_pages(window):
-    assert window.stack.count() == 5
+def test_window_has_four_pages(window):
+    assert window.stack.count() == 4
+    assert not hasattr(window, "page_blast")
     titles = [window.nav.item(i).text() for i in range(window.nav.count())]
-    expect = ["1. Import", "2. BLAST", "3. Reference",
-              "4. Review", "5. Export"]
+    expect = ["1. Import & BLAST", "2. Reference", "3. Review", "4. Export"]
     for got, exp in zip(titles, expect):     # 前缀是步骤标记（▶/✓/•），只比标题
         assert got.strip().endswith(exp), (got, exp)
     assert "▶" in titles[0] and "•" in titles[1]   # 初始：第 1 步当前、后续锁定
@@ -33,7 +33,7 @@ def test_window_has_five_pages(window):
 
 
 def test_steps_laid_out_horizontally(qtbot, window):
-    """五步水平排列：单行等宽平铺，随窗口宽度平分。"""
+    """四步水平排列：单行等宽平铺，随窗口宽度平分。"""
     from PyQt6.QtWidgets import QListView
 
     assert window.nav.flow() == QListView.Flow.LeftToRight
@@ -84,24 +84,61 @@ def test_log_dock_removed_status_bar_summarises(window):
 
 
 def test_step_nav_states_and_locking(window):
-    """Phase 2 步骤检查条：未完成前置步骤时后续导航锁定。"""
-    states = window._step_states()
-    assert states == [False, False, False, False, False]
-    # 初始（未导入）时第 2 步锁定
-    locked, reason = window._step_locked(1)
-    assert locked
-    # 导入序列后：第 1 步完成、第 2 步解锁、第 3 步仍锁定
+    """4 步检查条：步骤1 需序列+hits；其后依次需注释、审核、导出。"""
+    from types import SimpleNamespace
+
+    from fungal_annot.core.blast_runner import BlastHit
     from fungal_annot.core.models import SeqInput
+
+    assert window._step_states() == [False, False, False, False]
+    assert window._step_locked(1)[0]                    # 初始全锁
+
     window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 100, gene_type="tef1"))
     window.go_page(0)
-    states = window._step_states()
-    assert states[0] is True and states[1] is False
-    locked, _ = window._step_locked(1)
-    assert not locked
-    locked, _ = window._step_locked(2)
-    assert locked
-    # 当前步在导航中带 ▶ 标记
+    assert window._step_states()[0] is False            # 有序列但无 hits
+    assert window._step_locked(1)[0]                    # Reference 仍锁
+
+    window.hits["s1"] = [BlastHit(accession="AA000001", title="hit", pident=99.0,
+                                  qcovs=100.0, subject_len=100, flags={})]
+    assert window._step_states()[0] is True
+    assert not window._step_locked(1)[0]                # Reference 解锁
+    assert window._step_locked(2)[0]                    # Review 仍锁（未注释）
+
+    window.results["s1"] = SimpleNamespace(status="red")
+    assert window._step_locked(3)[0]                    # 红灯未确认 → Export 锁
+    window.confirmed["s1"] = True
+    assert not window._step_locked(3)[0]                # 确认后 Export 解锁
+
     assert "▶" in window.nav.item(0).text()
+
+
+def test_blast_all_have_hits_jumps_immediately(window):
+    """全部序列已有 hits：Start 不发网络请求，直接排空并跳 Reference。"""
+    from fungal_annot.core.blast_runner import BlastHit
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
+    window.hits["s1"] = [BlastHit(accession="AA000001", title="hit", pident=99.0,
+                                  qcovs=100.0, subject_len=100, flags={})]
+    window.settings["email"] = "a@example.org"
+    window.page_import.refresh()
+    window.page_import._start()
+    assert window.stack.currentIndex() == 1          # 自动进入 Reference
+    assert not window.page_import.b_cancel.isEnabled()
+    assert window.page_import.b_start.isEnabled()
+
+
+def test_blast_failure_drain_jumps(window):
+    """worker 失败同样消耗 pending：队列排空 → 恢复按钮 → 跳 Reference。"""
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
+    window.page_import.progress.setMaximum(1)
+    window._blast_pending = 1
+    window._on_worker_failed("s1", "boom")
+    assert window._blast_pending == 0
+    assert window.stack.currentIndex() == 1
+    assert not window.page_import.b_cancel.isEnabled()
 
 
 def test_import_and_remove(window):
