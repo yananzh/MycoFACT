@@ -289,40 +289,44 @@ def test_import_box_flow(window, tmp_path):
 
 def test_import_page_has_no_sequence_table(window):
     """P1 简化：去掉序列表格与 Paste from clipboard / Remove selected 按钮；
-    三个按钮统一主按钮样式、单词标签（与 Import 一致）。"""
+    导入三键统一主按钮样式、单词标签（BLAST 区按钮为合并页新增，另计）。"""
     from PyQt6.QtWidgets import QPushButton, QTableWidget
 
     page = window.page_import
     assert page.findChildren(QTableWidget) == []
     buttons = page.findChildren(QPushButton)
-    assert [b.text() for b in buttons] == ["Import", "Browse", "Clear"]
-    assert all(b.objectName() == "PrimaryButton" for b in buttons)
+    assert [b.text() for b in buttons] == ["Import", "Browse", "Clear",
+                                           "Start BLAST", "Cancel pending"]
+    assert buttons[0].objectName() == "PrimaryButton"
+    assert buttons[1].objectName() == "PrimaryButton"
+    assert buttons[2].objectName() == "PrimaryButton"
+    assert buttons[3].objectName() == "PrimaryButton"      # Start BLAST 主按钮
     assert not hasattr(page, "_remove_selected") and not hasattr(page, "_paste_clipboard")
 
 
-def test_blast_page_mode_cards(window):
-    """P2 布局：两种模式用互斥卡片区分——面板随卡片切换，主按钮/徽章联动。"""
-    page = window.page_blast
-    assert page.btn_mode_online.isChecked() and not page.btn_mode_offline.isChecked()
-    assert page.mode_stack.currentIndex() == 0
-    assert page.b_start.text() == "Start BLAST"
+def test_import_page_blast_section(window):
+    """合并页 BLAST 区：无模式卡片/无 Next 按钮；Start 禁用条件（无序列/无 email）。"""
+    from fungal_annot.core.models import SeqInput
 
-    # 模拟已加载本地参考 → 切到离线卡片：面板换页、主按钮变文案、徽章变 OFFLINE
-    window.local_ref_text = "LOCUS       demo"
-    window.local_ref_name = "reference.gb"
-    page.btn_mode_offline.setChecked(True)
-    page._on_mode_clicked(True)
-    assert page.mode_stack.currentIndex() == 1
-    assert page.b_start.text() == "Next (offline, no BLAST needed)"
-    assert page.chip_mode.text() == "OFFLINE"
+    page = window.page_import
+    assert hasattr(page, "b_start") and page.b_start.text() == "Start BLAST"
+    assert hasattr(page, "b_cancel") and hasattr(page, "progress")
+    assert hasattr(page, "chip_db") and hasattr(page, "chip_queue")
+    assert hasattr(page, "lbl_hint") and hasattr(page, "on_queue_finished")
+    assert not hasattr(page, "btn_mode_offline") and not hasattr(page, "mode_stack")
+    assert not hasattr(page, "b_next") and not hasattr(page, "chip_mode")
 
-    # 切回在线：本地参考被清除，面板与徽章复位
-    page.btn_mode_online.setChecked(True)
-    page._on_mode_clicked(False)
-    assert window.local_ref_text is None and window.local_ref_name is None
-    assert page.chip_mode.text() == "ONLINE"
-    assert page.mode_stack.currentIndex() == 0
-    assert page.lbl_ref.text() == "None selected"
+    page.refresh()
+    assert not page.b_start.isEnabled()                 # 无序列
+    window.settings["email"] = ""                       # 隔离用户本机已保存的 Settings
+    window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
+    page.refresh()
+    assert not page.b_start.isEnabled()                 # 未设 email
+    assert "Settings" in page.b_start.toolTip()
+    window.settings["email"] = "a@example.org"
+    page.refresh()
+    assert page.b_start.isEnabled()
+    assert not page.b_cancel.isEnabled()
 
 
 def test_import_box_loads_dropped_file(window, ref_record_seq, ref_gb_text, tmp_path):

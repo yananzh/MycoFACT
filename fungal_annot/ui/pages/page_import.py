@@ -8,10 +8,11 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QTextCursor
 from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog,
                              QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
-                             QPushButton, QVBoxLayout, QWidget)
+                             QProgressBar, QPushButton, QVBoxLayout, QWidget)
 
 from ...core.models import SeqInput
 from ..icons import icon
+from ..widgets.help import HelpButton
 
 # 裸序列允许的字符（IUPAC 核苷酸歧义码）
 _DNA_CHARS = set("ACGTUNRYKMSWBDHV")
@@ -189,6 +190,40 @@ class PageImport(QWidget):
         row.addStretch(1)
         layout.addLayout(row)
 
+        # ---- BLAST 区（自 BLAST 页并入，在线部分）----
+        chips = QHBoxLayout()
+        self.chip_db = QLabel("-")
+        self.chip_db.setObjectName("Chip")
+        self.chip_queue = QLabel("-")
+        self.chip_queue.setObjectName("Chip")
+        chips.addWidget(self.chip_db)
+        chips.addWidget(self.chip_queue)
+        chips.addStretch(1)
+        chips.addWidget(HelpButton("identity"))
+        layout.addLayout(chips)
+
+        self.lbl_hint = QLabel("")
+        self.lbl_hint.setObjectName("Hint")
+        self.lbl_hint.setWordWrap(True)
+        layout.addWidget(self.lbl_hint)
+
+        self.progress = QProgressBar()
+        layout.addWidget(self.progress)
+
+        b_row = QHBoxLayout()
+        self.b_start = QPushButton(icon("fa5s.play", "#ffffff"), "Start BLAST")
+        self.b_start.setObjectName("PrimaryButton")
+        self.b_start.clicked.connect(self._start)
+        self.b_cancel = QPushButton("Cancel pending")
+        self.b_cancel.clicked.connect(self._cancel)
+        self.b_cancel.setEnabled(False)
+        b_row.addWidget(self.b_start)
+        b_row.addWidget(self.b_cancel)
+        b_row.addStretch(1)
+        layout.addLayout(b_row)
+
+        self.refresh()
+
     # ---- 导入 ----
     def _import_box(self):
         try:
@@ -213,9 +248,43 @@ class PageImport(QWidget):
 
     # ---- 刷新 ----
     def refresh(self):
-        """本页不再列出已入库序列：页眉右侧给出条数，明细见状态栏与后续页面。"""
+        """页眉导入计数 + BLAST 区状态（徽章、提示、Start 禁用条件）。"""
         n = len(self.win.sequences)
         self.lbl_count.setText(f"{n} sequence(s) imported" if n else "")
+
+        cfg = self.win.make_config()
+        self.chip_db.setText(f"Database: {cfg.blast_db}")
+        self.chip_queue.setText(
+            f"{n} queued · ~{max(1, n * 3)} min" if n else "no sequences yet")
+        email_ok = bool(cfg.email)
+        reason = ""
+        if not n:
+            reason = "Import FASTA files in step 1 first. "
+        elif not email_ok:
+            reason = "Set your NCBI contact email in Tools ▸ Settings first. "
+        self.b_start.setEnabled(n > 0 and email_ok)
+        self.b_start.setToolTip("" if self.b_start.isEnabled()
+                                else reason.strip() or "not ready")
+        self.lbl_hint.setText(reason + "Online BLAST takes ~1-5 min per sequence "
+                                       "(serial, rate-limited queue).")
+
+    # ---- BLAST 任务 ----
+    def _start(self):
+        if not self.b_start.isEnabled():
+            return
+        # 先置按钮状态再提交：队列可能同步排空（全部已有 hits），
+        # 由 on_queue_finished 的刷新决定最终态（见 ledger ruling）
+        self.b_start.setEnabled(False)
+        self.b_cancel.setEnabled(True)
+        self.win.start_blast()
+
+    def _cancel(self):
+        self.win.blast_queue.cancel()
+
+    def on_queue_finished(self):
+        self.progress.setValue(self.progress.maximum())
+        self.b_cancel.setEnabled(False)
+        self.refresh()
 
     def _clear(self):
         if self.win.sequences and QMessageBox.question(
