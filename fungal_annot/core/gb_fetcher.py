@@ -38,8 +38,11 @@ def default_cache_dir() -> str:
 def fetch_gb_text(accession: str, email: str = "", api_key: str = "",
                   window=None, flank: int = 500, max_window: int = 500_000,
                   cache_dir: str | None = None,
-                  throttle: Throttle | None = None) -> tuple[str, str]:
-    """下载 GenBank 文本。window=(subj_start, subj_end)（参考 1-based）时取 ±flank。
+                  throttle: Throttle | None = None,
+                  seq_len: int | None = None) -> tuple[str, str]:
+    """下载 GenBank 文本。window=(subj_start, subj_end)（参考 1-based）时取 ±flank；
+    seq_len（参考全长，来自 BLAST 命中）用于把窗口末端夹取到记录范围内，避免
+    超出末端的请求被 NCBI 返回不同长度的子记录而触发帧校验失败。
 
     返回 (gb_text, region)；region 为 "full" 或 "a..b"。带 API key 时限速 10 req/s，
     否则按 NCBI 限制保守取 1.2s 间隔。
@@ -47,6 +50,9 @@ def fetch_gb_text(accession: str, email: str = "", api_key: str = "",
     if window:
         s = max(1, window[0] - flank)
         e = window[1] + flank
+        if seq_len:
+            s = min(s, seq_len)
+            e = min(e, seq_len)
         if e - s + 1 > max_window:
             raise GbFetchError(
                 f"Window of {e - s + 1} bp exceeds the {max_window} bp limit: {accession} looks like a genome-scale record;"

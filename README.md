@@ -17,10 +17,12 @@ marker）自动生成 NCBI 五列 feature table（.tbl）。设计文档见《�
 python main.py        # 启动 GUI
 ```
 
-五页流程：序列导入（拖入 FASTA + source 修饰符批量填写）→ BLAST / 离线参考 →
-参考选择（命中表 / 直接输入 accession）→ 注释审核（可编辑 feature 表格、即时重验、
-比对视图、红灯人工确认）→ 验证汇总与导出（.tbl + .fsa + 报告、table2asn 预检）。
-工具栏可保存/打开项目（JSON），随时关闭续作。
+五页流程：序列导入（拖入 / 浏览 / 粘贴 FASTA 或裸序列）→ BLAST / 离线参考 →
+参考选择（命中表行内单选 / 直接输入 accession）→ 注释审核（可编辑 feature 表格、即时重验、
+比对视图、红灯人工确认）→ 验证汇总与导出（.tbl + .fsa + 报告）。
+.tbl 为 BankIt 门户格式（只含 gene/CDS 等 feature，organism 在门户表单录入）。
+五个步骤以水平步骤条置于窗口顶部，点击已解锁的步骤即可跳转。
+菜单栏 File 可保存/打开项目（JSON），随时关闭续作。
 
 ## 安装
 
@@ -34,11 +36,11 @@ pip install -r requirements.txt
 # 一键演示：生成参考 GB + 两条查询（正链带插入 / 反向互补），离线跑通端到端
 python scripts/make_demo.py
 python main.py run --input demo/tef1_queries.fasta --out demo_out --gene-type tef1 \
-    --ref-gb demo/reference.gb \
-    --source "organism=Fusarium solani;strain=LabA1;country=China: Yunnan;collection_date=2021-Mar"
+    --ref-gb demo/reference.gb
 
 # 离线模式：用本地参考 GenBank 文件（测试/无网络环境）
 python main.py run --input seqs.fasta --out outdir --gene-type tef1 --ref-gb reference.gb
+# 省略 --gene-type 时自动从命中标题/参考注释判定；无法识别则用 Generic 通用预设
 
 # 在线模式：BLAST 选参考（需要网络；email 为 NCBI 要求）
 python main.py run --input seqs.fasta --out outdir --gene-type tef1 --email you@example.org

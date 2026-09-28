@@ -1,6 +1,5 @@
 """命令行入口（M1–M2 交付物）。UI（M3–M5）复用 services/pipeline 同一编排。"""
 import argparse
-import os
 import sys
 
 from Bio import SeqIO
@@ -28,8 +27,10 @@ def main(argv=None) -> int:
     r = sub.add_parser("run", help="FASTA -> annotation transfer -> .tbl/.fsa + validation report")
     r.add_argument("--input", required=True, help="input FASTA (one or more sequences)")
     r.add_argument("--out", required=True, help="output directory")
-    r.add_argument("--gene-type", required=True,
-                   help="gene preset name (tef1/rpb2/LSU/cox1/..., see presets)")
+    r.add_argument("--gene-type", default="",
+                   help="gene preset name (tef1/rpb2/LSU/cox1/..., see presets); "
+                        "optional - auto-detected from BLAST hit titles or the offline "
+                        "reference annotation when omitted")
     r.add_argument("--email", default="", help="NCBI contact email (required for online mode)")
     r.add_argument("--api-key", default="", help="Entrez API key (optional, higher rate limit)")
     r.add_argument("--organism", default="", help="BLAST Entrez query filter (e.g. 'Fusarium')")
@@ -38,10 +39,6 @@ def main(argv=None) -> int:
     r.add_argument("--identity", type=float, default=97.0, help="nucleotide identity threshold (default 97)")
     r.add_argument("--ref-gb", default="", help="offline mode: local reference GenBank file")
     r.add_argument("--accession", default="", help="reference accession directly (skip BLAST)")
-    r.add_argument("--source", default="",
-                   help="source qualifiers applied to all sequences, semicolon-separated key=value,"
-                        "e.g. 'organism=Fusarium sp.;strain=A1;country=China;"
-                        "collection_date=2021-Mar'")
     r.add_argument("--no-auto-partial", action="store_true",
                    help="disable auto-partial for features touching sequence ends")
 
@@ -56,13 +53,6 @@ def main(argv=None) -> int:
         return 0
 
     seqs = load_fasta(args.input)
-    src_quals = {}
-    for kv in args.source.split(";"):
-        if "=" in kv:
-            k, v = kv.split("=", 1)
-            src_quals[k.strip()] = v.strip()
-    for s in seqs:
-        s.source_qualifiers.update(src_quals)
     cfg = PipelineConfig(
         email=args.email, api_key=args.api_key, organism_filter=args.organism,
         blast_db=args.db, identity_threshold=args.identity,

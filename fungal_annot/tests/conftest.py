@@ -12,7 +12,8 @@ import random
 import pytest
 from Bio import SeqIO
 from Bio.Seq import Seq
-from Bio.SeqFeature import CompoundLocation, SeqFeature, SimpleLocation
+from Bio.SeqFeature import (BeforePosition, CompoundLocation, SeqFeature,
+                            SimpleLocation)
 from Bio.SeqRecord import SeqRecord
 
 # 密码子池：全部以 G/C 结尾、不以 T 开头且不含 "TA"/"TG" 子串——任何拼接顺序、
@@ -84,6 +85,75 @@ def ref_gb_text(ref_record_seq):
                         "transl_table": ["1"],
                         "translation": [str(Seq(cds[:-3]).translate())]}
     rec.features = [src, gene, cds_f]
+    buf = io.StringIO()
+    SeqIO.write(rec, buf, "genbank")
+    return buf.getvalue()
+
+
+@pytest.fixture(scope="session")
+def partial_ref_gb():
+    """5' partial 单 exon CDS 的参考记录：CDS <301..1150 且 /codon_start=2，
+    product/note 都写成 "complete cds"（用于回归完整性断言改写）。
+
+    用途：不变式回归——查询与参考 CDS 完全一致时，输出 codon_start 必须等于参考值。
+    """
+    rng = random.Random(11)
+    inner = "A" + _make_cds(849)          # 前置 1 个碱基 → 首个完整密码子在第 2 位
+    bg = "".join(rng.choice("ACGT") for _ in range(1500))
+    seq = list(bg)
+    seq[300:300 + len(inner)] = list(inner)
+    seq = "".join(seq)
+    rec = SeqRecord(Seq(seq), id="REF00002.1", name="REF00002",
+                    description="Fusarium partialus tef1 gene, partial cds")
+    rec.annotations["molecule_type"] = "DNA"
+    rec.annotations["data_file_division"] = "PLN"
+    rec.annotations["organism"] = "Fusarium partialus"
+    rec.annotations["source"] = "Fusarium partialus"
+    src = SeqFeature(SimpleLocation(0, 1500, strand=1), type="source")
+    src.qualifiers = {"organism": ["Fusarium partialus"], "mol_type": ["genomic DNA"],
+                      "strain": ["P001"], "country": ["China"]}
+    gene = SeqFeature(SimpleLocation(300, 1150, strand=1), type="gene")
+    gene.qualifiers = {"gene": ["tef1"]}
+    cds = SeqFeature(SimpleLocation(BeforePosition(300), 1150, strand=1), type="CDS")
+    cds.qualifiers = {"gene": ["tef1"],
+                      "product": ["translation elongation factor 1-alpha, complete cds"],
+                      "note": ["complete cds"],
+                      "transl_table": ["1"], "codon_start": ["2"]}
+    rec.features = [src, gene, cds]
+    buf = io.StringIO()
+    SeqIO.write(rec, buf, "genbank")
+    return buf.getvalue()
+
+
+@pytest.fixture(scope="session")
+def two_cds_gb():
+    """含两个 CDS 的参考记录（201..800 表 1；1201..1800 表 12）。
+
+    用途：回归 CDS 配对必须按参考坐标——查询只覆盖第二个 CDS 时，蛋白回检与密码表
+    必须取自该 CDS 自身，而非按下标取到被跳过的第一个 CDS。
+    """
+    rng = random.Random(23)
+    bg = "".join(rng.choice("ACGT") for _ in range(2400))
+    seq = list(bg)
+    seq[200:800] = list(_make_cds(600))       # CDS-A 201..800
+    seq[1200:1800] = list(_make_cds(600))     # CDS-B 1201..1800
+    seq = "".join(seq)
+    rec = SeqRecord(Seq(seq), id="REF00003.1", name="REF00003",
+                    description="two-CDS reference record")
+    rec.annotations["molecule_type"] = "DNA"
+    rec.annotations["data_file_division"] = "PLN"
+    rec.annotations["organism"] = "Fusarium duo"
+    rec.annotations["source"] = "Fusarium duo"
+    src = SeqFeature(SimpleLocation(0, 2400, strand=1), type="source")
+    src.qualifiers = {"organism": ["Fusarium duo"], "mol_type": ["genomic DNA"],
+                      "country": ["China"]}
+    cds_a = SeqFeature(SimpleLocation(200, 800, strand=1), type="CDS")
+    cds_a.qualifiers = {"gene": ["geneA"], "product": ["protein A"],
+                        "transl_table": ["1"]}
+    cds_b = SeqFeature(SimpleLocation(1200, 1800, strand=1), type="CDS")
+    cds_b.qualifiers = {"gene": ["geneB"], "product": ["protein B"],
+                        "transl_table": ["12"]}
+    rec.features = [src, cds_a, cds_b]
     buf = io.StringIO()
     SeqIO.write(rec, buf, "genbank")
     return buf.getvalue()

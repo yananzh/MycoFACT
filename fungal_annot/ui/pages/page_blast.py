@@ -1,17 +1,20 @@
-"""P2 BLAST 页（§7.2）：参数徽章、限速串行队列、进度/日志、可取消；
-离线模式下跳过 BLAST 直接使用本地参考 GenBank。
-Phase 2：主按钮状态驱动禁用（新手不点出错误）。"""
-from PyQt6.QtWidgets import (QCheckBox, QFileDialog, QGroupBox, QHBoxLayout,
-                             QLabel, QMessageBox, QProgressBar, QPushButton,
-                             QVBoxLayout, QWidget)
+"""P2 BLAST 页（§7.2）：两种模式用模式卡片明确区分——
 
-from ...services.worker import BlastWorker
+- Online BLAST：NCBI 在线比对（限速串行队列，进度/取消）；
+- Offline · local reference：直接用本地参考 GenBank，跳过 BLAST（秒级注释）。
+
+选中模式卡片即切换下方面板；离线模式选文件失败/取消自动回落到在线。
+Phase 2：主按钮状态驱动禁用（新手不点出错误）。"""
+from PyQt6.QtWidgets import (QButtonGroup, QFileDialog, QHBoxLayout, QLabel,
+                             QMessageBox, QProgressBar, QPushButton,
+                             QStackedWidget, QVBoxLayout, QWidget)
+
 from ..icons import icon
 from ..widgets.help import HelpButton
 
 
 class PageBlast(QWidget):
-    title = "2. BLAST / Reference"
+    title = "2. BLAST"          # 步骤条标签：水平等宽排布下需要短标签
 
     def __init__(self, win):
         super().__init__()
@@ -36,23 +39,45 @@ class PageBlast(QWidget):
         chips.addWidget(help_btn)
         layout.addLayout(chips)
 
-        offline_group = QGroupBox("Offline mode (no network / reference file known)")
-        off_layout = QHBoxLayout(offline_group)
-        self.chk_offline = QCheckBox("Use a local reference GenBank file (skip BLAST)")
-        self.chk_offline.toggled.connect(self._toggle_offline)
-        self.lbl_ref = QLabel("None selected")
-        self.lbl_ref.setObjectName("Hint")
-        b_pick = QPushButton("Browse...")
-        b_pick.clicked.connect(self._pick_ref)
-        off_layout.addWidget(self.chk_offline)
-        off_layout.addWidget(self.lbl_ref, 1)
-        off_layout.addWidget(b_pick)
-        layout.addWidget(offline_group)
+        # ---- 模式选择：两张互斥卡片，两种模式一眼分开 ----
+        mode_row = QHBoxLayout()
+        self.btn_mode_online = QPushButton(
+            "① Online BLAST\nSearch NCBI nt with the imported sequences")
+        self.btn_mode_online.setObjectName("ModeCard")
+        self.btn_mode_online.setCheckable(True)
+        self.btn_mode_offline = QPushButton(
+            "② Offline · local reference\nAnnotate against a local GenBank file (no network)")
+        self.btn_mode_offline.setObjectName("ModeCard")
+        self.btn_mode_offline.setCheckable(True)
+        mode_row.addWidget(self.btn_mode_online, 1)
+        mode_row.addWidget(self.btn_mode_offline, 1)
+        layout.addLayout(mode_row)
 
+        # ---- 模式面板：随所选卡片切换 ----
+        self.mode_stack = QStackedWidget()
+        w_online = QWidget()
+        v_online = QVBoxLayout(w_online)
+        v_online.setContentsMargins(0, 0, 0, 0)
         self.lbl_hint = QLabel("")
         self.lbl_hint.setObjectName("Hint")
         self.lbl_hint.setWordWrap(True)
-        layout.addWidget(self.lbl_hint)
+        v_online.addWidget(self.lbl_hint)
+        self.mode_stack.addWidget(w_online)
+
+        w_offline = QWidget()
+        h_off = QHBoxLayout(w_offline)
+        h_off.setContentsMargins(0, 0, 0, 0)
+        self.lbl_ref = QLabel("None selected")
+        self.lbl_ref.setObjectName("Hint")
+        b_pick = QPushButton("Browse reference GenBank...")
+        b_pick.clicked.connect(lambda: self._pick_ref())
+        h_off.addWidget(self.lbl_ref, 1)
+        h_off.addWidget(b_pick)
+        self.mode_stack.addWidget(w_offline)
+        layout.addWidget(self.mode_stack)
+
+        self.btn_mode_online.clicked.connect(lambda: self._on_mode_clicked(False))
+        self.btn_mode_offline.clicked.connect(lambda: self._on_mode_clicked(True))
 
         self.progress = QProgressBar()
         layout.addWidget(self.progress)
@@ -73,20 +98,28 @@ class PageBlast(QWidget):
         layout.addLayout(btns)
         layout.addStretch(1)
 
-        self.chk_offline.setChecked(self.win.local_ref_text is not None)
+        # 初始模式：已加载本地参考 → 离线；否则在线（编程置位不触发 clicked）
+        if self.win.local_ref_text is not None:
+            self.btn_mode_offline.setChecked(True)
+            self.lbl_ref.setText(self.win.local_ref_name or "Loaded")
+        else:
+            self.btn_mode_online.setChecked(True)
         self._refresh()
 
     # ---- 状态刷新 ----
     def _refresh(self):
         cfg = self.win.make_config()
         n = len(self.win.sequences)
-        offline = self.chk_offline.isChecked() and self.win.local_ref_text
+        offline_card = self.btn_mode_offline.isChecked()
+        offline = offline_card and bool(self.win.local_ref_text)
+        self.mode_stack.setCurrentIndex(1 if offline_card else 0)
         self.chip_db.setText(f"Database: {cfg.blast_db}")
         self.chip_queue.setText(
             f"{n} queued · ~{max(1, n * 3)} min" if n else "no sequences yet")
         self.chip_mode.setText("OFFLINE" if offline else "ONLINE")
         email_ok = bool(cfg.email)
         has_seqs = n > 0
+        reason = ""
         self.b_start.setEnabled(has_seqs and (offline or email_ok))
         if offline:
             self.b_start.setText("Next (offline, no BLAST needed)")
@@ -94,11 +127,10 @@ class PageBlast(QWidget):
                                   "reference; typically a few seconds.")
         else:
             self.b_start.setText("Start BLAST")
-            reason = ""
             if not has_seqs:
                 reason = "Import FASTA files in step 1 first. "
             elif not email_ok:
-                reason = "Set your NCBI contact email in toolbar Settings first. "
+                reason = "Set your NCBI contact email in Tools ▸ Settings first. "
             self.lbl_hint.setText(reason + "Online BLAST takes ~1-5 min per sequence "
                                          "(serial, rate-limited queue).")
         self.b_start.setToolTip("" if self.b_start.isEnabled()
@@ -107,36 +139,37 @@ class PageBlast(QWidget):
     def refresh(self):
         self._refresh()
 
-    # ---- 离线参考 ----
-    def _toggle_offline(self):
-        if self.chk_offline.isChecked() and not self.win.local_ref_text:
-            self._pick_ref()
-        if not self.chk_offline.isChecked():
+    # ---- 模式切换 ----
+    def _on_mode_clicked(self, offline: bool):
+        if offline and not self.win.local_ref_text:
+            if not self._pick_ref():                 # 取消/文件无效 → 回落在线
+                self.btn_mode_online.setChecked(True)
+        elif not offline:
             self.win.local_ref_text = None
             self.win.local_ref_name = None
             self.lbl_ref.setText("None selected")
         self._refresh()
 
-    def _pick_ref(self):
-        path, _ = QFileDialog.getOpenFileNames(
-            self, "Select reference GenBank file", "", "GenBank (*.gb *.gbk *.gbff);;All files (*)")
+    def _pick_ref(self) -> bool:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select reference GenBank file", "",
+            "GenBank (*.gb *.gbk *.gbff);;All files (*)")
         if not path:
-            self.chk_offline.setChecked(False)
-            return
+            return False
         try:
-            self.win.load_local_reference(path[0])
+            self.win.load_local_reference(path)
         except (OSError, ValueError) as ex:
             QMessageBox.warning(self, "Invalid reference file", str(ex))
-            self.chk_offline.setChecked(False)
-            return
+            return False
         self.lbl_ref.setText(self.win.local_ref_name or "Loaded")
         self._refresh()
+        return True
 
     # ---- 任务 ----
     def _start(self):
         if not self.b_start.isEnabled():
             return
-        if self.chk_offline.isChecked() and self.win.local_ref_text:
+        if self.btn_mode_offline.isChecked() and self.win.local_ref_text:
             self.win.go_page(2)          # 离线：P3 直接开始注释
             return
         self.win.start_blast()

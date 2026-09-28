@@ -21,12 +21,14 @@ class TransferOutcome:
 
 
 def codon_start_for(missing_5: int, ref_codon_start: int = 1) -> int:
-    """§2.1 公式：codon_start = ((3 − m mod 3) mod 3) + 1。
+    """§2.1 公式：codon_start = ((3 − m mod 3) mod 3) + 1，m 为 5' 端缺失的碱基数。
 
-    m 为 5' 端缺失的 CDS 碱基数；参考 CDS 自身 5' 端 partial 时其 codon_start
-    计入帧偏移（参考 qualifier 属参考坐标帧，不直接继承，但其相位信息是唯一来源）。
+    参考 CDS 自身 5' partial 时需计入其缺失量。注意 codon_start 与缺失数是**模 3
+    互补**关系：codon_start=k 表示参考在首个完整密码子前跳过了 k-1 个碱基，即相对
+    完整基因缺失 (3-(k-1)) mod 3 个碱基——不是 k-1 个。不变式：查询与参考 CDS 完全
+    一致（missing_5=0）时，输出 codon_start 必须等于参考自身的 codon_start。
     """
-    m = missing_5 + max(0, ref_codon_start - 1)
+    m = missing_5 + (3 - (ref_codon_start - 1)) % 3
     return ((3 - m % 3) % 3) + 1
 
 
@@ -118,9 +120,14 @@ def transfer_features(ref_features, mapping, query_len: int, preset,
 
         # ---- 逐段映射（比对空间）----
         parts_rc, dropped_outside, clipped = [], 0, 0
+        dropped_before = dropped_after = False
         for p in feat.parts:
             if p.end < lo or p.start > hi:
                 dropped_outside += 1          # §6.5：区间外 = 正常 partial 语义，非 error
+                if p.end < lo:
+                    dropped_before = True     # 低坐标侧被截断（读码方向取决 strand）
+                else:
+                    dropped_after = True
                 continue
             s = max(p.start, lo)
             e = min(p.end, hi)
@@ -146,6 +153,14 @@ def transfer_features(ref_features, mapping, query_len: int, preset,
             issues.append(Issue("info", "feature_skipped",
                                 f"{feat.ftype} reference feature does not overlap the query-covered region; not transferred"))
             continue
+        if dropped_before or dropped_after:
+            # A2：被丢弃的段是参考 feature 在查询覆盖区外的延续，其截断语义必须落到
+            # 保留段对应的坐标端（partial 标记绑定坐标端，故与 strand 无关；反向查询
+            # 的换端在后续 RC 转换里统一处理）。
+            if dropped_before:
+                parts_rc[0].partial_low = True
+            if dropped_after:
+                parts_rc[-1].partial_high = True
         if dropped_outside or clipped:
             n = dropped_outside + clipped
             issues.append(Issue(
@@ -170,12 +185,20 @@ def transfer_features(ref_features, mapping, query_len: int, preset,
         m_total, cs_val, cds_reads, complete_start, complete_stop = 0, 1, "", False, False
         if is_cds:
             m = _missing_5(feat.parts, lo, hi, feat.strand)
-            m_total = (m or 0) + max(0, ref_cs - 1)
-            cs_val = codon_start_for(m_total)
+            m_total = m or 0
+            cs_val = codon_start_for(m_total, ref_cs)
             cds_reads = _spliced_cds(conv, strand_native, query_seq)
             frame = cds_reads[cs_val - 1:]
-            complete_start = (m_total == 0 and frame[:3] == "ATG")
-            complete_stop = (len(frame) % 3 == 0 and frame[-3:] in _STOPS)
+            # 参考自身在该端 partial 时，完整密码子不可能存在（其起始/终止在记录之外）
+            # codon_start>1 按定义即表示 5' 截断（即便记录漏写 '<' 标记）
+            ref_p5 = (feat.parts[-1].partial_high if feat.strand < 0
+                      else feat.parts[0].partial_low) or ref_cs > 1
+            ref_p3 = (feat.parts[0].partial_low if feat.strand < 0
+                      else feat.parts[-1].partial_high)
+            complete_start = (m_total == 0 and not ref_p5 and not dropped_before
+                              and frame[:3] == "ATG")
+            complete_stop = (len(frame) % 3 == 0 and frame[-3:] in _STOPS
+                             and not ref_p3 and not dropped_after)
 
         # ---- 触及序列端点的自动 partial（§2.1，可全局关闭；完整密码子豁免）----
         touches_low = first.start == 1
@@ -213,7 +236,7 @@ def transfer_features(ref_features, mapping, query_len: int, preset,
         new_q = {}
         for k, vals in feat.qualifiers.items():
             if k in INHERIT_QUALIFIERS:
-                if k == "note":
+                if k in ("note", "product"):
                     vals = [_rewrite_note(v, is_partial) for v in vals]
                 new_q[k] = list(vals)
         if is_cds:
@@ -223,7 +246,10 @@ def transfer_features(ref_features, mapping, query_len: int, preset,
             if cs_val > 1:
                 new_q["codon_start"] = [str(cs_val)]
 
+        spans = [(p.ref_start, p.ref_end) for p in conv if p.ref_start and p.ref_end]
+        ref_key = ((min(s for s, _ in spans), max(e for _, e in spans))
+                   if spans else None)
         out.append(Feature(ftype=feat.ftype, strand=strand_native,
-                           parts=conv, qualifiers=new_q))
+                           parts=conv, qualifiers=new_q, ref_key=ref_key))
 
     return TransferOutcome(out, issues)

@@ -1,31 +1,37 @@
-"""主窗口（§7.1）：左侧步骤导航 + 中央五页向导 + 底部日志坞；工具栏项目存取与设置。
+"""主窗口（§7.1）：顶部水平步骤条 + 中央五页向导 + 底部状态栏；项目存取与设置走菜单栏。
+消息与摘要都收敛到状态栏（左侧最近消息 + 右侧步骤/序列/参考/注释/导出摘要）。
 
 状态中枢：sequences / hits / selected_ref / results / confirmed 由本对象持有，
 各页面通过 win 引用读写。BLAST 队列串行（限速），注释队列小并发。
 """
 import os
 
-from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtCore import QSettings, QSize, Qt
 from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFileDialog,
-                             QFormLayout, QHBoxLayout, QInputDialog, QLabel,
-                             QLineEdit, QListWidgetItem, QListWidget, QMainWindow,
-                             QMessageBox,
-                             QStackedWidget, QToolBar, QVBoxLayout, QWidget)
-from PyQt6.QtGui import QColor
+                             QFormLayout, QLabel, QLineEdit, QListWidgetItem,
+                             QMainWindow, QMessageBox, QStackedWidget,
+                             QVBoxLayout, QWidget)
+from PyQt6.QtGui import QColor, QGuiApplication
 
 from ..core.blast_runner import BlastHit
 from ..core.models import SeqInput
 from ..services.pipeline import PipelineConfig
 from ..services.project_store import (load_project, load_settings,
                                       save_project, save_settings)
-from ..services.worker import AnnotateWorker, BlastWorker, TaskQueue, WorkerSignals
+from ..services.worker import AnnotateWorker, BlastWorker, TaskQueue
 from .pages.page_blast import PageBlast
 from .pages.page_export import PageExport
 from .pages.page_import import PageImport
 from .pages.page_reference import PageReference
 from .pages.page_review import PageReview
-from .icons import icon
-from .widgets.log_panel import LogPanel
+from .widgets.step_bar import StepBar
+
+
+def _status_separator() -> QLabel:
+    """状态栏字段之间的浅色竖线。"""
+    sep = QLabel("\u2502")
+    sep.setObjectName("StatusSep")
+    return sep
 
 
 class SettingsDialog(QDialog):
@@ -42,8 +48,7 @@ class SettingsDialog(QDialog):
                   ("identity_threshold", "identity threshold %"),
                   ("hitlist_size", "Max hits"),
                   ("cache_dir", "Cache directory (optional)"),
-                  ("table2asn_path", "table2asn path (optional)"),
-                  ("table2asn_sbt", "table2asn template .sbt (optional)")]
+                  ]
         defaults = {"blast_db": "core_nt"}
         hints = {"email": "NCBI uses this to contact you about the submission.",
                  "blast_db": "core_nt is the current default nucleotide database.",
@@ -75,7 +80,17 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Fungal Multi-locus Feature Table Generator")
-        self.resize(1180, 760)
+        # 默认窗口大小：可用屏幕的 70%（夹在 900x600 与 1180x760 之间）；
+        # 用户手动调整后由 QSettings 记忆，此默认值仅首次启动生效
+        self.setMinimumSize(860, 560)
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            target = QSize(int(avail.width() * 0.7), int(avail.height() * 0.7))
+            target = target.boundedTo(QSize(1180, 760)).expandedTo(QSize(900, 600))
+            self.resize(target)
+        else:
+            self.resize(980, 640)
 
         # ---- 状态 ----
         self.settings = load_settings()
@@ -100,9 +115,8 @@ class MainWindow(QMainWindow):
             q.signals.log.connect(self.log)
             q.signals.progress.connect(self._on_worker_progress)
 
-        # ---- 布局 ----
-        self.nav = QListWidget()
-        self.nav.setObjectName("NavList")
+        # ---- 布局：顶部水平步骤条 + 中央页面 ----
+        self.nav = StepBar()
         self.stack = QStackedWidget()
         self.page_import = PageImport(self)
         self.page_blast = PageBlast(self)
@@ -115,52 +129,56 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(page.title)
             item.setData(Qt.ItemDataRole.UserRole, page.title)
             self.nav.addItem(item)
-        self.nav.currentRowChanged.connect(self._on_nav)
-        self.nav.setCurrentRow(0)
+        self.nav.stepClicked.connect(self._on_step)
+        self.stack.currentChanged.connect(lambda _i: self._refresh_nav())
 
         central = QWidget()
-        h = QHBoxLayout(central)
-        h.addWidget(self.nav, 0)
-        h.addWidget(self.stack, 1)
+        v = QVBoxLayout(central)
+        v.setContentsMargins(10, 8, 10, 6)
+        v.setSpacing(8)
+        v.addWidget(self.nav, 0)
+        v.addWidget(self.stack, 1)
         self.setCentralWidget(central)
 
-        self.log_dock = LogPanel(self)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.log_dock)
-        self.log_dock.hide()          # 新手默认不看日志，工具栏可开关
+        # ---- 菜单栏（原图标工具栏）----
+        bar = self.menuBar()
+        m_file = bar.addMenu("&File")
+        for label, shortcut, slot in (("New Project", "Ctrl+N", self._new_project),
+                                      ("Open Project...", "Ctrl+O", self._open_project),
+                                      ("Save Project...", "Ctrl+S", self._save_project)):
+            act = m_file.addAction(label, slot)
+            act.setShortcut(shortcut)
+        m_file.addSeparator()
+        m_file.addAction("Exit", self.close).setShortcut("Ctrl+Q")
+        bar.addMenu("&Tools").addAction("Settings...", self._open_settings)
 
-        # ---- 工具栏 ----
-        tb = QToolBar("Main toolbar")
-        self.addToolBar(tb)
-        for label, slot, icon_name in (("New", self._new_project, "fa5s.file"),
-                                       ("Open Project...", self._open_project, "fa5s.folder-open"),
-                                       ("Save Project", self._save_project, "fa5s.save"),
-                                       ("Settings...", self._open_settings, "fa5s.cog")):
-            act = tb.addAction(icon(icon_name), label)
-            act.triggered.connect(slot)
-        self.log_toggle = tb.addAction(icon("fa5s.terminal"), "Log")
-        self.log_toggle.setCheckable(True)
-        self.log_toggle.setChecked(False)
-        self.log_toggle.toggled.connect(self.log_dock.setVisible)
-
-        # ---- 状态栏摘要 ----
-        self.status_summary = QLabel("")
-        self.statusBar().addPermanentWidget(self.status_summary)
+        # ---- 状态栏：左侧最近消息 + 右侧常驻摘要 ----
+        sb = self.statusBar()
+        self.status_step = QLabel()
+        self.status_seq = QLabel()
+        self.status_ref = QLabel()
+        self.status_ann = QLabel()
+        self.status_ann.setObjectName("StatusAlerts")
+        self.status_out = QLabel()
+        self.status_out.setObjectName("StatusOut")
+        for label in (self.status_step, self.status_seq, self.status_ref):
+            sb.addPermanentWidget(label)
+            sb.addPermanentWidget(_status_separator())
+        sb.addPermanentWidget(self.status_ann)
+        sb.addPermanentWidget(_status_separator())
+        sb.addPermanentWidget(self.status_out)
         self.update_summary()
 
-        # ---- 记住窗口几何与布局 ----
+        # ---- 记住窗口几何 ----
         settings = QSettings("fungal_annot", "fungal_annot")
         geom = settings.value("geometry")
         if geom is not None:
             self.restoreGeometry(geom)
-        state = settings.value("windowState")
-        if state is not None:
-            self.restoreState(state)
         self._refresh_nav()          # 首屏即显示步骤标记
 
     def closeEvent(self, event):
         settings = QSettings("fungal_annot", "fungal_annot")
         settings.setValue("geometry", self.saveGeometry())
-        settings.setValue("windowState", self.saveState())
         super().closeEvent(event)
 
     # ---- 页面导航 ----
@@ -171,21 +189,17 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         self._refresh_nav()
 
-    def _on_nav(self, row):
+    def _on_step(self, row: int):
         if row < 0 or row == self.stack.currentIndex():
             return
         locked, reason = self._step_locked(row)
         if locked:
             self.log(f"Step {row + 1} is locked: {reason}")
-            self.nav.blockSignals(True)
-            self.nav.setCurrentRow(self.stack.currentIndex())
-            self.nav.blockSignals(False)
             return
         self.go_page(row)
 
     # ---- 步骤检查条（Phase 2）----
     def _step_states(self) -> list[bool]:
-        DOC = "done states: import / reference / annotate / review / export"
         annotated = len(self.results) > 0
         reviewed = annotated and all(
             res.status != "red" or self.confirmed.get(sid)
@@ -215,37 +229,75 @@ class MainWindow(QMainWindow):
             done = states[i]
             locked = any(not s for s in states[:i])
             if i == cur:
-                item.setText(marks["cur"] + title)
-                item.setBackground(QColor("#2D7DD2"))
-                item.setForeground(QColor("#ffffff"))
+                mark, bg, fg = marks["cur"], "#2D7DD2", "#ffffff"
             elif done:
-                item.setText(marks["done"] + title)
-                item.setBackground(QColor("#eaf4ec"))
-                item.setForeground(QColor("#1a7f37"))
+                mark, bg, fg = marks["done"], "#eaf4ec", "#1a7f37"
             elif locked:
-                item.setText(marks["locked"] + title)
-                item.setBackground(QColor("transparent"))
-                item.setForeground(QColor("#8b949e"))
+                mark, bg, fg = marks["locked"], None, "#8b949e"
             else:
-                item.setText(marks["todo"] + title)
-                item.setBackground(QColor("transparent"))
-                item.setForeground(QColor("#24292f"))
+                mark, bg, fg = marks["todo"], None, "#24292f"
+            item.setText(mark + title)
+            item.setBackground(QColor(bg) if bg else QColor(Qt.GlobalColor.transparent))
+            item.setForeground(QColor(fg))
+            font = item.font()
+            font.setBold(i == cur)
+            item.setFont(font)
         self.update_summary()
 
     def update_summary(self):
-        n = len(self.sequences)
-        ann = len(self.results)
-        warn = sum(1 for r in self.results.values() if getattr(r, "status", "red") == "yellow")
-        err = sum(1 for r in self.results.values() if getattr(r, "status", "red") == "red")
-        text = f"{n} sequence(s) \u00b7 {ann} annotated"
+        """状态栏常驻摘要：当前步骤 / 序列 / 参考 / 注释与告警 / 导出。"""
+        idx = self.stack.currentIndex()
+        self.status_step.setText("Step %d/5 \u00b7 %s" % (
+            idx + 1, self.nav.item(idx).data(Qt.ItemDataRole.UserRole)))
+
+        genes = {s.gene_type for s in self.sequences if getattr(s, "gene_type", "")}
+        seq_text = f"{len(self.sequences)} sequence(s)"
+        if len(genes) == 1:
+            seq_text += f" \u00b7 {genes.pop()}"
+        elif len(genes) > 1:
+            seq_text += f" \u00b7 {len(genes)} gene types"
+        self.status_seq.setText(seq_text)
+
+        if self.local_ref_text is not None:
+            self.status_ref.setText(f"offline \u00b7 {self.local_ref_name}")
+        else:
+            chosen = sum(1 for v in self.selected_ref.values() if v)
+            self.status_ref.setText(
+                f"{len(self.hits)} BLAST result(s) \u00b7 {chosen} ref chosen")
+
+        n, ann = len(self.sequences), len(self.results)
+        warn = sum(1 for r in self.results.values()
+                   if getattr(r, "status", "red") == "yellow")
+        red = [sid for sid, r in self.results.items()
+               if getattr(r, "status", "red") == "red"]
+        open_red = sum(1 for sid in red if not self.confirmed.get(sid))
+        parts = [f"annotated {ann}/{n}" if n else "no sequences yet"]
         if warn:
-            text += f" \u00b7 {warn} warn"
-        if err:
-            text += f" \u00b7 {err} red"
-        self.status_summary.setText(text)
+            parts.append(f"{warn} warn")
+        if red:
+            parts.append(f"{len(red)} red"
+                         + (f" ({open_red} unconfirmed)" if open_red else ""))
+        if ann and not warn and not red:
+            parts.append("all clear")
+        self.status_ann.setText(" \u00b7 ".join(parts))
+        self._set_status_level(self.status_ann,
+                               "error" if red else "warn" if warn else "ok")
+
+        self.status_out.setText("\u2713 exported" if self.exported else "not exported")
+        self._set_status_level(self.status_out, "done" if self.exported else "todo")
+
+    @staticmethod
+    def _set_status_level(label: QLabel, level: str):
+        """切换 QSS 的 [level=...] 分支：需 unpolish/polish 才会重绘。"""
+        if label.property("level") == level:
+            return
+        label.setProperty("level", level)
+        label.style().unpolish(label)
+        label.style().polish(label)
 
     def log(self, text: str):
-        self.log_dock.append(text)
+        """原日志坞由状态栏承接：最近一条消息留在状态栏左侧，直到被下一条替换。"""
+        self.statusBar().showMessage(text)
 
     # ---- 序列状态维护（页面调用）----
     def load_fasta_file(self, path: str):
@@ -284,15 +336,6 @@ class MainWindow(QMainWindow):
         self.selected_ref.clear()
         self.update_summary()
 
-    def set_gene_type(self, seq_id: str, gene_type: str):
-        for s in self.sequences:
-            if s.seq_id == seq_id:
-                s.gene_type = gene_type
-
-    def apply_source_to_all(self, quals: dict):
-        for s in self.sequences:
-            s.source_qualifiers.update(quals)
-
     # ---- 配置 ----
     def make_config(self) -> PipelineConfig:
         st = self.settings
@@ -329,9 +372,6 @@ class MainWindow(QMainWindow):
         for s in self.sequences:
             if s.seq_id in self.hits:
                 continue
-            if not s.gene_type:
-                self.log(f"[{s.seq_id}] No gene type set - skipped BLAST")
-                continue
             self.blast_queue.submit(BlastWorker(s, self.make_config(),
                                                 self.blast_queue.signals))
             self._blast_pending += 1
@@ -353,12 +393,17 @@ class MainWindow(QMainWindow):
             ref_acc = None
             if not offline:
                 if acc:
-                    ref_acc = acc            # 直接 accession 通道（§6.1）
+                    # 行内单选存的是 accession：与已知命中匹配时按命中走
+                    # （保留 BLAST HSP 窗口截取信息），否则走直接下载通道（§6.1）
+                    hit = next((h for h in self.hits.get(s.seq_id, [])
+                                if h.accession == acc), None)
+                    if hit is not None:
+                        hits = [hit]
+                    else:
+                        ref_acc = acc
                 else:
-                    hits = self.hits.get(s.seq_id)
-                    if not hits:
-                        self.log(f"[{s.seq_id}] no BLAST hits and no accession given - skipped (run BLAST first)")
-                        continue
+                    self.log(f"[{s.seq_id}] no reference chosen - skipped")
+                    continue
             self.annotate_queue.submit(AnnotateWorker(s, self.make_config(),
                                                self.annotate_queue.signals,
                                                hits=hits,

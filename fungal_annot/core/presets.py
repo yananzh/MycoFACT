@@ -40,6 +40,31 @@ def load_presets(path: str | None = None) -> dict[str, GenePreset]:
     return out
 
 
+def detect_from_titles(titles, presets: dict[str, GenePreset] | None = None) -> GenePreset | None:
+    """从 BLAST 命中标题 / 参考注释文本推断基因预设（§6.1 自动判定）。
+
+    对每个预设的名称与别名做**词边界**匹配（"act" 不得命中 "extract"）；
+    titles 按优先级排列（排名靠前的命中优先），命中任意标题即返回第一个
+    匹配的预设。Generic 通用预设不参与匹配（它本身就是匹配失败的兜底）。
+    """
+    import re
+    presets = presets if presets is not None else load_presets()
+    for title in titles or []:
+        if not title:
+            continue
+        t = title.lower()
+        for p in presets.values():
+            if p.name == "Generic":
+                continue
+            for token in [p.name] + p.aliases:
+                token = token.lower().strip()
+                if not token:
+                    continue
+                if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", t):
+                    return p
+    return None
+
+
 def get(name: str, presets: dict[str, GenePreset] | None = None) -> GenePreset | None:
     """按预设名或别名查找，大小写不敏感。"""
     if not name:

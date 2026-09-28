@@ -22,9 +22,13 @@ def test_codon_start_formula():
     """§2.1：codon_start = ((3 − m mod 3) mod 3) + 1（缺 1→3，缺 2→2，缺整密码子→1）。"""
     assert [codon_start_for(m) for m in range(7)] == [1, 3, 2, 1, 3, 2, 1]
     assert codon_start_for(100) == 3
-    # 参考 CDS 自身 5' partial 时，其 codon_start 计入帧偏移
-    assert codon_start_for(0, ref_codon_start=2) == 3
-    assert codon_start_for(1, ref_codon_start=2) == 2   # 共 2 个不完整碱基
+    # 参考 CDS 自身 5' partial 时：codon_start 与缺失数是模 3 互补关系，
+    # 不变式 = 完全一致的查询必须复现参考自身的 codon_start
+    assert codon_start_for(0, ref_codon_start=1) == 1
+    assert codon_start_for(0, ref_codon_start=2) == 2
+    assert codon_start_for(0, ref_codon_start=3) == 3
+    assert codon_start_for(1, ref_codon_start=2) == 1
+    assert codon_start_for(2, ref_codon_start=2) == 3
 
 
 def test_qualifier_triage(ref_record_seq, ref_gb_text):

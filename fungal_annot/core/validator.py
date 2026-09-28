@@ -1,5 +1,6 @@
-"""自动验证（§6.6）：翻译 / 边界 / 密码表一致性 / identity 门禁 / 修饰符格式 /
-Seq ID / N 区段边界。所有问题输出为结构化 Issue，驱动状态灯。
+"""自动验证（§6.6）：翻译 / 边界 / 密码表一致性 / identity 门禁 / Seq ID / N 区段边界。
+所有问题输出为结构化 Issue，驱动状态灯。source 修饰符由 BankIt 门户采集，不在
+.tbl 中，也不在本工具校验范围。
 
 状态判定：status_of(issues) → red（任一 error）/ yellow（有 warning）/ green。
 """
@@ -8,42 +9,10 @@ import re
 from Bio.Seq import Seq
 
 from .feature_transfer import _spliced_cds, resolve_transl_table
-from .models import Feature, Issue
+from .models import Issue
 
 SEQID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-|+]*$")
-LATLON_RE = re.compile(r"^-?\d{1,3}(\.\d+)?\s*[NS]\s+-?\d{1,3}(\.\d+)?\s*[EW]$")
-# NCBI 认可的 collection_date 常见形态：2021 / 2021-03 / 2021-03-15 / 2021-Mar / 2021-Mar-15
-# 及区间 "a/b"、"before YYYY"、"after YYYY"、"not collected"
-_DATE_RE = re.compile(
-    r"^\d{4}(-\d{2}(-\d{2})?|-[A-Z][a-z]{2}(-\d{2})?)?"
-    r"(/\d{4}(-\d{2}(-\d{2})?|-[A-Z][a-z]{2}(-\d{2})?)?)?$")
-_DATE_SPECIAL = re.compile(r"^(before|after)\s+\d{4}$|^not collected$", re.I)
 _STOPS = ("TAA", "TAG", "TGA")
-
-# NCBI 受控国家/地区列表的常用子集；未收录者降级为 warning（请核对官方列表），
-# 避免因本地清单不全而误拦截合法提交。
-COUNTRY_LIST = {
-    "Argentina", "Australia", "Austria", "Bangladesh", "Belarus", "Belgium",
-    "Bolivia", "Bosnia and Herzegovina", "Brazil", "Bulgaria", "Cambodia",
-    "Cameroon", "Canada", "Chile", "China", "Colombia", "Costa Rica",
-    "Croatia", "Cuba", "Cyprus", "Czechia", "Czech Republic", "Denmark",
-    "Dominican Republic", "Ecuador", "Egypt", "Estonia", "Ethiopia",
-    "Finland", "France", "French Polynesia", "Georgia", "Germany", "Ghana",
-    "Greece", "Greenland", "Guatemala", "Hungary", "Iceland", "India",
-    "Indonesia", "Iran", "Iraq", "Ireland", "Israel", "Italy", "Jamaica",
-    "Japan", "Jordan", "Kazakhstan", "Kenya", "Korea", "South Korea",
-    "Kyrgyzstan", "Laos", "Latvia", "Lebanon", "Lithuania", "Madagascar",
-    "Malaysia", "Mexico", "Mongolia", "Montenegro", "Morocco", "Myanmar",
-    "Nepal", "Netherlands", "New Zealand", "Nicaragua", "Nigeria", "Norway",
-    "Oman", "Pakistan", "Panama", "Papua New Guinea", "Paraguay", "Peru",
-    "Philippines", "Poland", "Portugal", "Puerto Rico", "Qatar", "Romania",
-    "Russia", "Russian Federation", "Saudi Arabia", "Serbia", "Singapore",
-    "Slovakia", "Slovenia", "South Africa", "Spain", "Sri Lanka", "Sweden",
-    "Switzerland", "Taiwan", "Tanzania", "Thailand", "Tunisia", "Turkey",
-    "Turkmenistan", "Uganda", "Ukraine", "United Arab Emirates",
-    "United Kingdom", "UK", "USA", "United States", "Uruguay", "Uzbekistan",
-    "Venezuela", "Vietnam", "Viet Nam", "Zambia", "Zimbabwe",
-}
 
 
 def status_of(issues) -> str:
@@ -129,45 +98,17 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
                                     f"{f.ftype} boundary falls in a run of N bases; coordinates may be unreliable"))
                 break
 
-    # ---- source 修饰符（§2.4）----
-    src = next((f for f in features if f.ftype == "source"), None)
-    if src is None:
-        issues.append(Issue("error", "source_missing", "Missing source feature"))
-    else:
-        q = {k: v[0] for k, v in src.qualifiers.items() if v}
-        if not q.get("organism"):
-            issues.append(Issue("warning", "modifier_missing", "source lacks organism"))
-        if not q.get("mol_type"):
-            issues.append(Issue("warning", "modifier_missing", "source lacks mol_type"))
-        country = (q.get("country") or "").strip()
-        if not country:
-            issues.append(Issue("warning", "modifier_missing",
-                                "source lacks country (mandatory for naturally collected specimens)"))
-        else:
-            head = country.split(":")[0].strip()
-            if not head:
-                issues.append(Issue("error", "modifier_format", f"country has invalid format: '{country}'"))
-            elif head not in COUNTRY_LIST:
-                issues.append(Issue("warning", "country_unverified",
-                                    f"country '{head}' is not in the local controlled list; check the official NCBI country list"))
-        date = (q.get("collection_date") or "").strip()
-        if date and not (_DATE_RE.match(date) or _DATE_SPECIAL.match(date)):
-            issues.append(Issue("error", "modifier_format",
-                                f"collection_date does not follow NCBI format: '{date}'"
-                                "(e.g. 2021 / 2021-03 / 2021-03-15 / 2021-Mar / 2021-Mar-15)"))
-        latlon = (q.get("lat_lon") or "").strip()
-        if latlon and not LATLON_RE.match(latlon):
-            issues.append(Issue("error", "modifier_format",
-                                f"lat_lon should look like '12.3 N 45.6 E': '{latlon}'"))
+    # source 修饰符不校验：BankIt 门户模式下 source 不在 .tbl 中，
+    # organism/来源信息由门户表单采集并校验（§7.2 P1/P5）。
 
     # ---- CDS 逐条检查 ----
     ref_cds = [f for f in ref_features if f.ftype == "CDS"]
     new_cds = [f for f in features if f.ftype == "CDS"]
     if len(ref_cds) != len(new_cds):
         issues.append(Issue("info", "cds_pairing",
-                            "Transferred CDS count differs from the reference (some skipped/dropped); protein check paired where possible"))
-    for i, f in enumerate(new_cds):
-        ref_f = ref_cds[i] if i < len(ref_cds) else None
+                            "Transferred CDS count differs from the reference (some skipped/dropped); pairing by reference coordinates"))
+    for f in new_cds:
+        ref_f = _match_ref_cds(f, ref_cds)
         table, conflict, certain = resolve_transl_table(ref_f, preset, cfg.user_transl_table)
         if conflict:
             issues.append(Issue(
@@ -229,9 +170,26 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
     if nt is not None and nt * 100 < cfg.identity_threshold:
         issues.append(Issue(
             "error", "low_identity",
-            f"Nucleotide identity {nt:.1%} is below threshold {cfg.identity_threshold}%%; confirm the reference choice manually"))
+            f"Nucleotide identity {nt:.1%} is below threshold {cfg.identity_threshold}%; "
+            "confirm the reference choice manually"))
 
     return issues
+
+
+def _match_ref_cds(feature, ref_cds):
+    """按参考坐标把迁移后的 CDS 配回来源参考 CDS（迁移会跳过/丢弃部分 feature，
+    按下标配对会错位，导致密码表与蛋白回检取自错误的基因）。"""
+    key = getattr(feature, "ref_key", None)
+    if key is None:
+        return None
+    for rf in ref_cds:
+        if not rf.parts:
+            continue
+        lo = min(p.start for p in rf.parts)
+        hi = max(p.end for p in rf.parts)
+        if lo <= key[0] and key[1] <= hi:      # 保留段必落在来源 CDS 区间内
+            return rf
+    return None
 
 
 def ref_val_of(ref_feature):

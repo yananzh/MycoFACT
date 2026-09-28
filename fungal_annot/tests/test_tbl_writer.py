@@ -18,10 +18,10 @@ def test_plus_join_and_partial():
     assert lines[0] == ">Feature seq1"
     assert "<1\t300\tCDS" in lines
     assert "401\t849\tCDS" in lines
-    assert "\t\tgene\ttef1" in lines
-    assert "\t\tcodon_start\t3" in lines
+    assert "\t\t\tgene\ttef1" in lines           # 五列：1-3 列空，qualifier 第 4 列
+    assert "\t\t\tcodon_start\t3" in lines
     # qualifier 只出现在最后一个区段行之后
-    assert lines.index("\t\tgene\ttef1") > lines.index("401\t849\tCDS")
+    assert lines.index("\t\t\tgene\ttef1") > lines.index("401\t849\tCDS")
 
 
 def test_minus_descending_and_markers():

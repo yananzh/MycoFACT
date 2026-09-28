@@ -8,6 +8,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
 
+from PyQt6.QtWidgets import QPlainTextEdit
+
 
 @pytest.fixture
 def window(qtbot):
@@ -20,17 +22,70 @@ def window(qtbot):
 def test_window_has_five_pages(window):
     assert window.stack.count() == 5
     titles = [window.nav.item(i).text() for i in range(window.nav.count())]
-    expect = ["1. Import", "2. BLAST / Reference", "3. Reference Selection",
-              "4. Review & Edit", "5. Summary & Export"]
+    expect = ["1. Import", "2. BLAST", "3. Reference",
+              "4. Review", "5. Export"]
     for got, exp in zip(titles, expect):     # 前缀是步骤标记（▶/✓/•），只比标题
         assert got.strip().endswith(exp), (got, exp)
     assert "▶" in titles[0] and "•" in titles[1]   # 初始：第 1 步当前、后续锁定
+    # 默认窗口大小夹取（≤1180x760，≥最小尺寸）
+    assert window.size().width() <= 1180 and window.size().height() <= 760
+    assert window.minimumSize().width() == 860 and window.minimumSize().height() == 560
+
+
+def test_steps_laid_out_horizontally(qtbot, window):
+    """五步水平排列：单行等宽平铺，随窗口宽度平分。"""
+    from PyQt6.QtWidgets import QListView
+
+    assert window.nav.flow() == QListView.Flow.LeftToRight
+    assert not window.nav.isWrapping()
+    window.resize(1100, 700)
+    window.show()
+    qtbot.waitUntil(lambda: window.nav.visualItemRect(window.nav.item(0)).width() > 0,
+                    timeout=5000)
+    rects = [window.nav.visualItemRect(window.nav.item(i))
+             for i in range(window.nav.count())]
+    assert len({r.y() for r in rects}) == 1                       # 同一行
+    assert len({r.width() for r in rects}) == 1                   # 等宽
+    assert [r.x() for r in rects] == sorted(r.x() for r in rects)
+    assert rects[-1].right() <= window.nav.viewport().width() + 1  # 不超出可视区
+
+
+def test_icon_toolbar_replaced_by_menu_bar(window):
+    """原图标工具栏（New/Open/Save/Settings/Log）改为文字菜单栏。"""
+    from PyQt6.QtWidgets import QToolBar
+
+    assert window.findChildren(QToolBar) == []
+    labels = [a.text() for a in window.menuBar().actions()]
+    assert labels == ["&File", "&Tools"]
+    file_items = [a.text() for a in window.menuBar().actions()[0].menu().actions()
+                  if a.text()]
+    assert file_items == ["New Project", "Open Project...", "Save Project...", "Exit"]
+
+
+def test_log_dock_removed_status_bar_summarises(window):
+    """去掉日志坞：消息落到状态栏，右侧摘要给出步骤/序列/参考/注释/导出。"""
+    from PyQt6.QtWidgets import QDockWidget
+
+    assert window.findChildren(QDockWidget) == []            # 无日志坞
+    assert window.status_step.text() == "Step 1/5 · 1. Import"
+    assert window.status_seq.text() == "0 sequence(s)"
+    assert window.status_ann.text() == "no sequences yet"
+    assert window.status_out.text() == "not exported"
+
+    window.log("hello status bar")                            # 原 log() 通道
+    assert window.statusBar().currentMessage() == "hello status bar"
+
+    from fungal_annot.core.models import SeqInput
+    window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 30, gene_type="tef1"))
+    window.exported = True
+    window.update_summary()
+    assert window.status_seq.text() == "1 sequence(s) · tef1"
+    assert window.status_ann.text() == "annotated 0/1"
+    assert window.status_out.text() == "✓ exported"
 
 
 def test_step_nav_states_and_locking(window):
     """Phase 2 步骤检查条：未完成前置步骤时后续导航锁定。"""
-    from PyQt6.QtCore import Qt
-
     states = window._step_states()
     assert states == [False, False, False, False, False]
     # 初始（未导入）时第 2 步锁定
@@ -50,12 +105,10 @@ def test_step_nav_states_and_locking(window):
     assert "▶" in window.nav.item(0).text()
 
 
-def test_import_and_gene_type(window):
+def test_import_and_remove(window):
     from fungal_annot.core.models import SeqInput
     window.add_sequence(SeqInput(seq_id="t1", seq="ACGT" * 25, gene_type="tef1"))
     assert window.sequences[0].seq_id == "t1"
-    window.set_gene_type("t1", "rpb2")
-    assert window.sequences[0].gene_type == "rpb2"
     window.remove_sequence("t1")
     assert window.sequences == []
 
@@ -79,7 +132,7 @@ def test_offline_annotate_and_review(window, ref_record_seq, ref_gb_text):
     page.refresh()
     page.load_result("u1")
     features = page.feature_table.to_features()
-    assert [f.ftype for f in features] == ["source", "gene", "CDS"]
+    assert [f.ftype for f in features] == ["gene", "CDS"]
     # P4 编辑重验：不加改动重验，状态应保持
     page.current = "u1"
     page._revalidate()
@@ -132,6 +185,217 @@ def test_project_save_load_roundtrip(window, tmp_path, ref_record_seq, ref_gb_te
     assert [s.seq_id for s in sequences] == ["p1"]
     assert results["p1"].status == res.status
     assert results["p1"].tbl_text == res.tbl_text
+
+
+def test_alignment_text_columns_truly_aligned(window, ref_record_seq, ref_gb_text):
+    """回归：比对视图三行前缀等宽、'|' 与碱基逐列对齐（此前标记行偏移 1 列）。"""
+    from fungal_annot.core.align_mapper import revcomp
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import annotate_sequence
+    from fungal_annot.ui.pages.page_review import _alignment_text
+
+    seq, _ = ref_record_seq
+    # 含插入的查询（内部 indel 会产生 gap 列）
+    q = seq[300:1600]
+    q = q[:402] + "GCA" + q[402:]
+    for query, orient in ((q, "forward"), (revcomp(q), "reverse")):
+        res = annotate_sequence(SeqInput(seq_id="a", seq=query, gene_type="tef1"),
+                                window.make_config(), reference_gb_text=ref_gb_text)
+        text = _alignment_text(res.detail.mapping, res.detail.ref_seq)
+        body = text.splitlines()[2:]          # 跳过头部与空行
+        groups = [body[i:i + 4] for i in range(0, len(body) - 3, 4)]
+        assert groups and all(len(g) == 4 for g in groups)
+        for ref_l, m_l, q_l, blank in groups:
+            assert blank == "" or blank is None
+            assert len(ref_l) == len(m_l) == len(q_l)          # 三行等长
+            rseq, mseq, qseq = ref_l[11:], m_l[11:], q_l[11:]  # 前缀 11 列
+            assert len(rseq) == len(mseq) == len(qseq)
+            for a, mk, b in zip(rseq, mseq, qseq):
+                if mk == "|":
+                    assert a == b and a != "-"                 # '|' 处碱基必须相同
+            # 行首坐标为真实坐标（数字且单调不减）
+            import re as _re
+            r_lab = _re.match(r"R\s+(\d+|-)", ref_l)
+            assert r_lab and r_lab.group(1) != "-"
+
+
+def test_alignment_viewer_uses_monospace(qtbot, window, ref_record_seq, ref_gb_text):
+    """回归：比对视图必须用等宽字体——全局 QSS 的比例字体会让 | 标记视觉错位。"""
+    from fungal_annot.ui.pages.page_review import AlignmentDialog
+
+    dlg = AlignmentDialog("title", "R       1  ACGT\n          |\nQ       1  ACGT")
+    qtbot.addWidget(dlg)
+    view = dlg.findChild(QPlainTextEdit)
+    assert view is not None and view.objectName() == "MonoViewer"
+    assert dlg.windowTitle() == "title"
+    qss = open("fungal_annot/resources/style.qss", encoding="utf-8").read()
+    assert "QPlainTextEdit#MonoViewer" in qss and "monospace" in qss
+
+
+def test_reference_features_text(window, ref_record_seq, ref_gb_text):
+    """Phase 3：View reference features —— 展示参考自身的五列 feature table
+    （含 source 修饰符与参考原有 qualifier，如 protein_id）。"""
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import annotate_sequence
+
+    seq, _ = ref_record_seq
+    res = annotate_sequence(SeqInput(seq_id="a", seq=seq[300:1600], gene_type="tef1"),
+                            window.make_config(), reference_gb_text=ref_gb_text)
+    window.results["a"] = res
+    window.page_review.current = "a"
+    text = window.page_review._reference_features_text()
+    assert text is not None
+    assert text.startswith(">Feature REF00001.1")
+    assert "201\t600\tCDS" in text and "701\t1149\tCDS" in text      # 参考坐标原样
+    assert "\t\t\torganism\tFusarium referenceus" in text            # 合成 source 行（五列）
+    assert "\t\t\tprotein_id\tNP_999.1" in text                      # 参考原有 qualifier 保留
+    assert "codon_start" not in text                                 # 参考 CDS 完整，无该限定符
+
+
+
+def test_parse_pasted_input():
+    """统一导入框的文本解析：FASTA 多条 / 裸序列 / 非法输入。"""
+    import pytest as _pytest
+    from fungal_annot.ui.pages.page_import import parse_pasted_input
+
+    seqs = parse_pasted_input(">a\nACGTACGT\n>b\nTTTTGGGG")
+    assert [(s.seq_id, s.seq) for s in seqs] == [("a", "ACGTACGT"), ("b", "TTTTGGGG")]
+    seqs = parse_pasted_input("  acgt acgt\n ")
+    assert len(seqs) == 1 and seqs[0].seq_id == "pasted_seq"
+    assert seqs[0].seq == "ACGTACGT"
+    with _pytest.raises(ValueError):
+        parse_pasted_input("")
+    with _pytest.raises(ValueError):
+        parse_pasted_input("ACGTX")   # X 非核苷酸字符
+
+
+def test_import_box_flow(window, tmp_path):
+    """统一输入框：文件拖入读入框内 → Import 解析入库并清空。"""
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="g1", seq="ACGT" * 50))
+    window.page_import.refresh()
+    assert window.page_import.lbl_count.text() == "1 sequence(s) imported"
+
+    box = window.page_import.import_box
+    box.setPlainText(">s9\nACGTACGTACGT")
+    window.page_import._import_box()
+    assert window.sequences[-1].seq_id == "s9"
+    assert box.toPlainText() == ""          # 导入成功后清空
+    # 重复导入同一 Seq ID → 报错且不清空
+    box.setPlainText(">s9\nACGTACGTACGT")
+    window.page_import._import_box()
+    assert box.toPlainText() != ""
+
+
+def test_import_page_has_no_sequence_table(window):
+    """P1 简化：去掉序列表格与 Paste from clipboard / Remove selected 按钮；
+    三个按钮统一主按钮样式、单词标签（与 Import 一致）。"""
+    from PyQt6.QtWidgets import QPushButton, QTableWidget
+
+    page = window.page_import
+    assert page.findChildren(QTableWidget) == []
+    buttons = page.findChildren(QPushButton)
+    assert [b.text() for b in buttons] == ["Import", "Browse", "Clear"]
+    assert all(b.objectName() == "PrimaryButton" for b in buttons)
+    assert not hasattr(page, "_remove_selected") and not hasattr(page, "_paste_clipboard")
+
+
+def test_blast_page_mode_cards(window):
+    """P2 布局：两种模式用互斥卡片区分——面板随卡片切换，主按钮/徽章联动。"""
+    page = window.page_blast
+    assert page.btn_mode_online.isChecked() and not page.btn_mode_offline.isChecked()
+    assert page.mode_stack.currentIndex() == 0
+    assert page.b_start.text() == "Start BLAST"
+
+    # 模拟已加载本地参考 → 切到离线卡片：面板换页、主按钮变文案、徽章变 OFFLINE
+    window.local_ref_text = "LOCUS       demo"
+    window.local_ref_name = "reference.gb"
+    page.btn_mode_offline.setChecked(True)
+    page._on_mode_clicked(True)
+    assert page.mode_stack.currentIndex() == 1
+    assert page.b_start.text() == "Next (offline, no BLAST needed)"
+    assert page.chip_mode.text() == "OFFLINE"
+
+    # 切回在线：本地参考被清除，面板与徽章复位
+    page.btn_mode_online.setChecked(True)
+    page._on_mode_clicked(False)
+    assert window.local_ref_text is None and window.local_ref_name is None
+    assert page.chip_mode.text() == "ONLINE"
+    assert page.mode_stack.currentIndex() == 0
+    assert page.lbl_ref.text() == "None selected"
+
+
+def test_import_box_loads_dropped_file(window, ref_record_seq, ref_gb_text, tmp_path):
+    """文件拖入输入框：内容读入框内（裸序列文件自动补 FASTA 头）。"""
+    seq, _ = ref_record_seq
+    fa = tmp_path / "q.fasta"
+    fa.write_text(">q1\n" + seq[300:900] + "\n", encoding="utf-8")
+    bare = tmp_path / "bare.txt"
+    bare.write_text(seq[300:900] + "\n", encoding="utf-8")
+
+    box = window.page_import.import_box
+    box.load_paths([str(fa)])
+    assert ">q1" in box.toPlainText()
+    box.load_paths([str(bare)])
+    assert ">bare" in box.toPlainText()     # 裸序列文件自动补头
+
+
+def test_loaded_project_reexports_without_crash(window, tmp_path, ref_record_seq, ref_gb_text):
+    """回归 U4：加载项目后再次导出不得崩溃（SeqResultLite 需具备 report_row），
+    且 features 应从项目文件恢复（审核表格与导出汇总正确）。"""
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import annotate_sequence, write_outputs
+    from fungal_annot.services.project_store import load_project, save_project
+
+    seq, _ = ref_record_seq
+    s = SeqInput(seq_id="u4", seq=seq[300:1600], gene_type="tef1",
+                 source_qualifiers={"organism": "F. t", "country": "China"})
+    res = annotate_sequence(s, window.make_config(), reference_gb_text=ref_gb_text)
+    path = str(tmp_path / "p.json")
+    save_project(path, [s], {}, {}, {"u4": res}, {})
+    sequences, _hits, _sel, results, _st = load_project(path)
+
+    lite = results["u4"]
+    assert [f.ftype for f in lite.features] == ["gene", "CDS"]  # feature 已恢复
+    assert set(lite.report_row()) == set(res.report_row())                # 报告行同构
+    assert lite.report_row()["n_features"] == 2
+    written = write_outputs([lite], str(tmp_path / "out"), sequences)
+    assert any(w.endswith("u4.tbl") for w in written)
+    # 门户模式：.tbl 不含 source，输出与注释时的 tbl_text 一致
+    out_tbl = (tmp_path / "out" / "u4.tbl").read_text(encoding="utf-8")
+    assert "\tsource" not in out_tbl and "CDS" in out_tbl
+    assert out_tbl == res.tbl_text
+
+
+def test_reference_row_radio_default_and_pick(window):
+    """Phase 2 简化：命中表每行单选框，默认第一行（推荐），点选即生效。"""
+    from fungal_annot.core.blast_runner import BlastHit
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="r1", seq="ACGT" * 60, gene_type="tef1"))
+    window.hits["r1"] = [
+        BlastHit(accession="AA000001", title="hit one, partial cds", pident=99.0,
+                 qcovs=100.0, subject_len=60, flags={}),
+        BlastHit(accession="AA000002", title="hit two, complete cds", pident=98.0,
+                 qcovs=100.0, subject_len=60, flags={}),
+    ]
+    page = window.page_reference
+    page.refresh()
+    page.seq_list.setCurrentRow(0)
+
+    # 默认选中第一行（推荐），且选择即写入状态
+    assert window.selected_ref["r1"] == "AA000001"
+    assert page.lbl_choice.text() == "Reference: AA000001"
+    assert page.b_annotate.isEnabled()
+    # 点第二行的单选框 → 选择切换
+    page.hit_table._radios[1].setChecked(True)
+    assert window.selected_ref["r1"] == "AA000002"
+    # 单选互斥：第一行已取消勾选
+    assert not page.hit_table._radios[0].isChecked()
+    # Use recommended for all → 回到第一行
+    page._use_recommended_all()
+    assert window.selected_ref["r1"] == "AA000001"
 
 
 def test_start_annotation_button_flow(qtbot, window, ref_record_seq, ref_gb_text):

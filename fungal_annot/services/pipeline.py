@@ -9,8 +9,8 @@ from ..core.blast_runner import BlastError, rank_hits, run_blast
 from ..core.feature_parser import extract_features
 from ..core.feature_transfer import transfer_features
 from ..core.gb_fetcher import GbFetchError, fetch_gb_text, parse_gb
-from ..core.models import Feature, FeaturePart, Issue, Provenance, SeqInput
-from ..core.presets import get as get_preset
+from ..core.models import Issue, Provenance, SeqInput
+from ..core.presets import detect_from_titles, get as get_preset
 from ..core.tbl_writer import write_fsa, write_report_csv, write_tbl
 from ..core.validator import status_of, validate
 
@@ -38,6 +38,8 @@ class AnnotateDetail:
     ref_features: list = field(default_factory=list)
     ref_seq: str = ""
     preset: object = None
+    ref_len: int = 0                                  # 参考全长（参考 feature table 展示用）
+    ref_source_quals: dict = field(default_factory=dict)  # 参考 source 修饰符（只读展示）
 
 
 @dataclass
@@ -70,16 +72,6 @@ class SeqResult:
         }
 
 
-def _source_feature(seq_input: SeqInput, length: int) -> Feature:
-    quals = {}
-    for k, v in seq_input.source_qualifiers.items():
-        if v:
-            quals[k] = [str(v)]
-    quals.setdefault("mol_type", ["genomic DNA"])
-    return Feature(ftype="source", strand=1,
-                   parts=[FeaturePart(start=1, end=length)], qualifiers=quals)
-
-
 def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
                       reference_gb_text: str | None = None,
                       reference_accession: str | None = None,
@@ -88,13 +80,14 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
     三者皆无时走在线 BLAST。"""
     res = SeqResult(seq_id=seq_input.seq_id)
     L = len(seq_input.seq)
-    preset = get_preset(seq_input.gene_type)
-    if preset is None:
+    preset = get_preset(seq_input.gene_type) if seq_input.gene_type else None
+    explicit_unknown = bool(seq_input.gene_type) and preset is None
+    if explicit_unknown:
         res.issues.append(Issue("error", "preset_unknown",
                                 f"Unknown gene type '{seq_input.gene_type}' (see the presets command)"))
         res.status = "red"
         return res
-    if preset.manual_confirm:
+    if preset is not None and preset.manual_confirm:
         res.issues.append(Issue("warning", "preset_manual_confirm",
                                 f"{preset.name} is a mitochondrial/minor marker: few reference records, mostly auto-annotated;"
                                 "manual confirmation required"))
@@ -123,7 +116,7 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
                 hits = run_blast(seq_input.seq, blast_db=cfg.blast_db,
                                  organism=cfg.organism_filter,
                                  hitlist_size=cfg.hitlist_size)
-                hits = rank_hits(hits, preset)
+                hits = rank_hits(hits, preset)   # preset 可为 None（RefSeq 加分跳过）
             if not hits:
                 raise BlastError("BLAST returned no hits")
             hit = hits[0]
@@ -135,13 +128,42 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
                                          api_key=cfg.api_key, window=window,
                                          flank=cfg.window_flank,
                                          max_window=cfg.max_window,
-                                         cache_dir=cfg.cache_dir)
+                                         cache_dir=cfg.cache_dir,
+                                         seq_len=hit.subject_len or None)
             rec = parse_gb(text, region)
             res.provenance.source = "blast"
             res.provenance.region = region
             res.provenance.reference = hit.accession
             res.provenance.pident = hit.pident
             res.provenance.qcovs = hit.qcovs
+
+        # ---- 1b. 基因类型自动判定（§6.1：从命中标题/参考注释推断）----
+        if preset is None:
+            titles = [h.title for h in (hits or [])[:5]]
+            if rec is not None:
+                for f in rec.features:
+                    for qk in ("product", "gene"):
+                        titles.extend(f.qualifiers.get(qk, []))
+            detected = detect_from_titles(titles)
+            if detected is not None:
+                seq_input.gene_type = detected.name
+                preset = detected
+                src_desc = "BLAST hit titles" if hits else "reference annotation"
+                res.issues.append(Issue(
+                    "info", "gene_type_auto",
+                    f"Gene type auto-detected as '{detected.name}' from {src_desc}; "
+                    "if wrong, add the correct gene to presets.json"))
+            else:
+                preset = get_preset("Generic")
+                seq_input.gene_type = "Generic"
+                res.issues.append(Issue(
+                    "warning", "gene_type_generic",
+                    "Gene not recognized from hit titles/annotation - using the Generic "
+                    "preset (broad feature whitelist, transl table from the reference "
+                    "record only). Verify manually, or add the gene to presets.json "
+                    "to enable tailored transfer."))
+            if progress:
+                progress(f"gene type: {seq_input.gene_type}", 0.2)
 
         # ---- 2. 比对与映射 ----
         if progress:
@@ -160,15 +182,18 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
                                     user_transl_table=cfg.user_transl_table,
                                     query_seq=seq_input.seq)
 
-        # ---- 4. source 组装 + 验证 ----
-        features = [_source_feature(seq_input, L)] + outcome.features
+        # ---- 4. 验证（source 不在 .tbl 中，由 BankIt 门户采集，§7.2）----
+        features = outcome.features
         v_issues = validate(seq_input, features, mapping, ref_features, ref_seq,
                             preset, cfg)
         res.features = features
-        res.issues = outcome.issues + v_issues
+        res.issues = res.issues + outcome.issues + v_issues   # 累加：勿覆盖自动判定/人工确认等早期提示
         res.status = status_of(res.issues)
-        res.detail = AnnotateDetail(mapping=mapping, ref_features=ref_features,
-                                    ref_seq=ref_seq, preset=preset)
+        src_feat = next((f for f in rec.features if f.type == "source"), None)
+        res.detail = AnnotateDetail(
+            mapping=mapping, ref_features=ref_features, ref_seq=ref_seq, preset=preset,
+            ref_len=len(ref_seq),
+            ref_source_quals=dict(src_feat.qualifiers) if src_feat else {})
 
         # ---- 5. 导出文本 ----
         res.tbl_text = write_tbl(features, seq_input.seq_id)
@@ -190,7 +215,11 @@ def run_batch(seq_inputs, cfg: PipelineConfig, **kwargs) -> list[SeqResult]:
 
 def write_outputs(results: list[SeqResult], out_dir: str,
                   seq_inputs: list[SeqInput] | None = None) -> list[str]:
-    """写出 .tbl/.fsa 配对与验证报告 CSV，返回文件路径列表。"""
+    """写出 .tbl/.fsa 配对与验证报告 CSV，返回文件路径列表。
+
+    BankIt 门户模式（GB2sequin 同款工作流）：.tbl 只含 gene/CDS 等 feature，
+    不含 source——organism 与来源修饰符在门户表单采集（§7.2 P1/P5）。
+    """
     os.makedirs(out_dir, exist_ok=True)
     written = []
     rows = []

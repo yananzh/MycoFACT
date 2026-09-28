@@ -1,23 +1,27 @@
-"""P5 导出页（§7.2）：汇总表、输出目录、导出（红灯未确认拦截）、table2asn 预检。"""
+"""P5 导出页（§7.2）：汇总表、输出目录、导出（红灯未确认拦截）。
+
+BankIt 门户模式：.tbl 只含 gene/CDS 等 feature（source 由门户表单采集），
+因此 table2asn 预检不再适用，已随自包含模式一并移除。
+"""
+from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                              QMessageBox, QPushButton, QTableWidget,
                              QTableWidgetItem, QVBoxLayout, QWidget)
 
-from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtCore import QUrl
-
 from ...services.pipeline import write_outputs
-from ...services.precheck import find_table2asn, run_precheck
 from ..icons import icon
 
 
 class PageExport(QWidget):
-    title = "5. Summary & Export"
+    title = "5. Export"         # 步骤条标签：水平等宽排布下需要短标签
 
     def __init__(self, win):
         super().__init__()
         self.win = win
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
@@ -39,22 +43,23 @@ class PageExport(QWidget):
         btns = QHBoxLayout()
         b_refresh = QPushButton("Refresh summary")
         b_refresh.clicked.connect(self.refresh)
-        b_export = QPushButton(icon("fa5s.file-export", "#ffffff"), "Export all (.tbl + .fsa + report)")
+        b_export = QPushButton(icon("fa5s.file-export", "#ffffff"),
+                               "Export all (.tbl + .fsa + report)")
         b_export.setObjectName("PrimaryButton")
         b_export.clicked.connect(self._export)
-        b_precheck = QPushButton("table2asn precheck")
         self.b_open_folder = QPushButton(icon("fa5s.folder-open"), "Open output folder")
         self.b_open_folder.clicked.connect(self._open_folder)
-        b_precheck.clicked.connect(self._precheck)
         btns.addWidget(b_refresh)
         btns.addWidget(b_export)
-        btns.addWidget(b_precheck)
         btns.addWidget(self.b_open_folder)
         btns.addStretch(1)
         layout.addLayout(btns)
 
         self.lbl_hint = QLabel(
-            "Red sequences without manual confirmation are blocked from export (§7.2 P5). Results were validated at annotation time and after every edit.")
+            "Red sequences without manual confirmation are blocked from export (§7.2 P5). "
+            "The .tbl contains gene/CDS features only - organism and source modifiers are "
+            "entered in the BankIt portal (GB2sequin-style workflow). Results were "
+            "validated at annotation time and after every edit.")
         self.lbl_hint.setWordWrap(True)
         layout.addWidget(self.lbl_hint)
 
@@ -111,21 +116,3 @@ class PageExport(QWidget):
         out = self.dir_edit.text().strip()
         if out and os.path.isdir(out):
             QDesktopServices.openUrl(QUrl.fromLocalFile(out))
-
-    def _precheck(self):
-        exe = find_table2asn(self.win.settings)
-        if not exe:
-            QMessageBox.information(
-                self, "table2asn not found",
-                "NCBI table2asn was not found on this machine.\n"
-                "Download it from NCBI, add it to PATH, or set the full path in Settings.\n"
-                "The exported .tbl/.fsa pairs are ready for official validation.")
-            return
-        out = self.dir_edit.text().strip()
-        if not out:
-            QMessageBox.warning(self, "Missing directory", "Select the output directory (with exported files) first.")
-            return
-        sbt = (self.win.settings or {}).get("table2asn_sbt", "")
-        ok, text = run_precheck(out, exe, sbt_template=sbt)
-        QMessageBox.information(self, "table2asn precheck" + (" (passed)" if ok else " (failed)"),
-                                text[:4000])

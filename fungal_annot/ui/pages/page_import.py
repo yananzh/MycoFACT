@@ -1,76 +1,128 @@
-"""P1 序列导入页（§7.2）：拖放卡片为主视觉（Phase 2 新手引导）、序列表、
-source 修饰符批量填写（默认折叠，应用前展开）。"""
+"""P1 序列导入页（§7.2）：统一导入输入框——支持直接粘贴序列文本（FASTA 或裸
+序列），也支持把 FASTA 文件拖入框内（内容读入框中），统一点 Import 解析入库。
+source 修饰符不在本页采集——BankIt 门户模式下由门户表单录入（§7.2 P5）。"""
+import io
 import os
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent
-from PyQt6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QFrame,
-                             QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                             QMessageBox, QPushButton, QTableWidget,
-                             QTableWidgetItem, QVBoxLayout, QWidget)
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QTextCursor
+from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog,
+                             QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
+                             QPushButton, QVBoxLayout, QWidget)
 
 from ...core.models import SeqInput
-from ...core.presets import load_presets
 from ..icons import icon
 
-_SOURCE_FIELDS = [("organism", "organism (species)"),
-                  ("strain", "strain (isolate no.)"),
-                  ("country", "country (e.g. China: Yunnan)"),
-                  ("collection_date", "collection_date (e.g. 2021-Mar)"),
-                  ("isolated_from_source", "isolated_from_source (source)"),
-                  ("lat_lon", "lat_lon (e.g. 30.5 N 114.3 E)"),
-                  ("identified_by", "identified_by (determiner)")]
+# 裸序列允许的字符（IUPAC 核苷酸歧义码）
+_DNA_CHARS = set("ACGTUNRYKMSWBDHV")
 
 
-class DropCard(QFrame):
-    """虚线拖放卡片：页面主视觉。点击 = 浏览文件；拖入 = 导入。"""
+def parse_pasted_input(text: str) -> list[SeqInput]:
+    """解析输入框文本：FASTA（一条或多条）或裸 DNA 序列。
 
-    clicked = pyqtSignal()
-    filesDropped = pyqtSignal(list)
+    裸序列自动命名 pasted_seq；含非核苷酸字符或为空时抛 ValueError。
+    """
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Nothing to import: the text is empty.")
+    if text.startswith(">"):
+        from Bio import SeqIO
+        records = list(SeqIO.parse(io.StringIO(text), "fasta"))
+        if not records:
+            raise ValueError("No FASTA entries found in the input.")
+        return [SeqInput(seq_id=str(r.id), seq=str(r.seq).upper()) for r in records]
+    clean = "".join(text.split()).upper()
+    bad = set(clean) - _DNA_CHARS
+    if bad:
+        raise ValueError("Non-nucleotide characters in the sequence: "
+                         + "".join(sorted(bad))[:10])
+    return [SeqInput(seq_id="pasted_seq", seq=clean)]
+
+
+class PasteDialog(QDialog):
+    """粘贴输入对话框：校验通过才允许关闭，解析结果存 self.sequences。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("DropCard")
+        self.setWindowTitle("Paste sequences")
+        self.resize(560, 420)
+        self.sequences: list[SeqInput] = []
+        v = QVBoxLayout(self)
+        tip = QLabel("Paste FASTA text (one or more entries) or a bare DNA sequence.")
+        tip.setObjectName("Hint")
+        v.addWidget(tip)
+        self.edit = QPlainTextEdit()
+        self.edit.setPlaceholderText(">seq1\nATGG...\n\n>seq2\nATGG...")
+        font = self.edit.font()
+        font.setFamily("Consolas")
+        self.edit.setFont(font)
+        v.addWidget(self.edit, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def accept(self):
+        try:
+            self.sequences = parse_pasted_input(self.edit.toPlainText())
+        except ValueError as ex:
+            QMessageBox.warning(self, "Invalid input", str(ex))
+            return
+        super().accept()
+
+
+class ImportBox(QPlainTextEdit):
+    """统一导入输入框：可直接粘贴序列文本，也可把 FASTA 文件拖入框内
+    （文件内容读入框中），再由 Import 按钮统一解析入库。"""
+
+    filesLoaded = pyqtSignal(list)   # 成功读入的文件路径
+    errorRaised = pyqtSignal(str)    # 读文件失败的提示信息
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("ImportBox")
         self.setAcceptDrops(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
-        self.icon_label = QLabel()
-        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        pm = icon("fa5s.file-import", "#2D7DD2").pixmap(34, 34)
-        self.icon_label.setPixmap(pm)
-        self.main_label = QLabel("Drag & drop FASTA files here")
-        self.main_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.main_label.setStyleSheet("font-size: 12pt; font-weight: 600; color: #24292f;")
-        self.sub_label = QLabel("or click to browse — multi-file and multi-sequence supported")
-        self.sub_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sub_label.setObjectName("Hint")
-        layout.addWidget(self.icon_label)
-        layout.addWidget(self.main_label)
-        layout.addWidget(self.sub_label)
+        self.setPlaceholderText("Paste FASTA here (one or more entries) or a bare DNA "
+                                "sequence,\nor drag & drop FASTA files into this box...")
 
-    def set_compact(self, compact: bool):
-        """有序列后收缩为细条。"""
-        self.setProperty("compact", "true" if compact else "false")
-        self.icon_label.setVisible(not compact)
-        self.sub_label.setVisible(not compact)
-        self.main_label.setText("＋  Add more FASTA files (drag & drop or click)"
-                                if compact else "Drag & drop FASTA files here")
-        self.setMaximumHeight(64 if compact else 16777215)
-        self.style().unpolish(self)
-        self.style().polish(self)
+    def load_paths(self, paths: list[str]):
+        """把文件内容读入输入框（追加）。裸序列文件自动补上以文件名命名的 FASTA 头。"""
+        from PyQt6.QtGui import QTextCursor
+        for p in paths:
+            try:
+                with open(p, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read().strip()
+            except OSError as ex:
+                self.errorRaised.emit(f"Cannot read {os.path.basename(p)}: {ex}")
+                continue
+            if not text:
+                continue
+            if not text.startswith(">"):
+                base = os.path.splitext(os.path.basename(p))[0]
+                seq = "".join(text.split()).upper()
+                bad = set(seq) - _DNA_CHARS
+                if bad:
+                    self.errorRaised.emit(
+                        f"{os.path.basename(p)}: non-nucleotide characters "
+                        + "".join(sorted(bad))[:10])
+                    continue
+                text = f">{base}\n{seq}"
+            cursor = self.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.setTextCursor(cursor)
+            self.insertPlainText(text + "\n")
+            self.filesLoaded.emit([p])
 
-    # ---- 交互 ----
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-
+    # ---- 拖放：文件读入框内；文本拖入按默认插入 ----
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
             self.setProperty("dragOver", "true")
             self.style().unpolish(self)
             self.style().polish(self)
             event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
 
     def dragLeaveEvent(self, event):
         self.setProperty("dragOver", "false")
@@ -78,14 +130,15 @@ class DropCard(QFrame):
         self.style().polish(self)
 
     def dropEvent(self, event: QDropEvent):
-        self.setProperty("dragOver", "false")
-        self.style().unpolish(self)
-        self.style().polish(self)
-        paths = [u.toLocalFile() for u in event.mimeData().urls()
-                 if u.isLocalFile() and os.path.splitext(u.toLocalFile())[1].lower()
-                 in (".fasta", ".fa", ".fna", ".ffn", ".faa", ".txt")]
-        if paths:
-            self.filesDropped.emit(paths)
+        if event.mimeData().hasUrls():
+            self.setProperty("dragOver", "false")
+            self.style().unpolish(self)
+            self.style().polish(self)
+            paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+            self.load_paths(paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
 
 
 class PageImport(QWidget):
@@ -96,90 +149,73 @@ class PageImport(QWidget):
         self.win = win
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
-        self.drop_card = DropCard()
-        self.drop_card.clicked.connect(self._add_files_dialog)
-        self.drop_card.filesDropped.connect(self.add_fasta_paths)
-        layout.addWidget(self.drop_card)
+        header = QHBoxLayout()
+        icon_label = QLabel()
+        icon_label.setPixmap(icon("fa5s.file-import", "#2D7DD2").pixmap(20, 20))
+        title = QLabel("Import sequences — paste text or drag & drop FASTA files into the box")
+        title.setObjectName("PageTitle")
+        header.addWidget(icon_label)
+        header.addWidget(title)
+        header.addStretch(1)
+        self.lbl_count = QLabel("")
+        self.lbl_count.setObjectName("Hint")
+        header.addWidget(self.lbl_count)
+        layout.addLayout(header)
+
+        self.import_box = ImportBox()
+        self.import_box.setMinimumHeight(120)
+        self.import_box.errorRaised.connect(
+            lambda msg: QMessageBox.warning(self, "Import failed", msg))
+        layout.addWidget(self.import_box, 1)
 
         row = QHBoxLayout()
-        b_del = QPushButton(icon("fa5s.trash-alt"), "Remove selected")
-        b_del.clicked.connect(self._remove_selected)
-        b_clear = QPushButton(icon("fa5s.broom"), "Clear all")
-        b_clear.setObjectName("DangerButton")
+        self.b_import = QPushButton(icon("fa5s.check", "#ffffff"), "Import")
+        self.b_import.setObjectName("PrimaryButton")
+        self.b_import.setToolTip("Parse the box content and add the sequences to the project")
+        self.b_import.clicked.connect(self._import_box)
+        b_browse = QPushButton(icon("fa5s.folder-open", "#ffffff"), "Browse")
+        b_browse.setObjectName("PrimaryButton")
+        b_browse.setToolTip("Pick FASTA files and load them into the box")
+        b_browse.clicked.connect(self._add_files_dialog)
+        b_clear = QPushButton(icon("fa5s.broom", "#ffffff"), "Clear")
+        b_clear.setObjectName("PrimaryButton")
+        b_clear.setToolTip("Remove all imported sequences")
         b_clear.clicked.connect(self._clear)
-        row.addWidget(b_del)
+        row.addWidget(self.b_import)
+        row.addWidget(b_browse)
         row.addWidget(b_clear)
         row.addStretch(1)
         layout.addLayout(row)
 
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Seq ID (editable)", "Length", "Gene type"])
-        self.table.setColumnWidth(0, 280)
-        self.table.itemChanged.connect(self._on_item_changed)
-        layout.addWidget(self.table, 1)
-
-        # source 修饰符：checkable GroupBox，取消勾选即折叠（Phase 2 新手引导）
-        group = QGroupBox("Source modifiers — batch apply to all sequences (optional; §2.4)")
-        group.setCheckable(True)
-        group.setChecked(False)
-        form = QFormLayout(group)
-        self.source_edits = {}
-        for key, label in _SOURCE_FIELDS:
-            edit = QLineEdit()
-            edit.setPlaceholderText({"country": "China: Yunnan",
-                                     "collection_date": "2021-Mar",
-                                     "lat_lon": "30.5 N 114.3 E"}.get(key, ""))
-            self.source_edits[key] = edit
-            form.addRow(label, edit)
-        b_apply = QPushButton("Apply to all sequences")
-        b_apply.clicked.connect(self._apply_source_to_all)
-        form.addRow("", b_apply)
-        layout.addWidget(group)
-
-        self.preset_names = sorted(load_presets().keys())
-
-    # ---- 添加/移除 ----
-    def add_fasta_paths(self, paths):
+    # ---- 导入 ----
+    def _import_box(self):
         try:
-            for path in paths:
-                self.win.load_fasta_file(path)
-        except (OSError, ValueError) as ex:
+            seqs = parse_pasted_input(self.import_box.toPlainText())
+        except ValueError as ex:
+            QMessageBox.warning(self, "Invalid input", str(ex))
+            return
+        try:
+            for s in seqs:
+                self.win.add_sequence(s)
+        except ValueError as ex:
             QMessageBox.warning(self, "Import failed", str(ex))
+        self.import_box.clear()
         self.refresh()
-
-    def refresh(self):
-        self.drop_card.set_compact(len(self.win.sequences) > 0)
-        self.table.blockSignals(True)
-        self.table.setRowCount(0)
-        for s in self.win.sequences:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(s.seq_id))
-            self.table.setItem(row, 1, QTableWidgetItem(str(len(s.seq))))
-            combo = QComboBox()
-            combo.addItems(self.preset_names + ["Custom"])
-            if s.gene_type in self.preset_names:
-                combo.setCurrentText(s.gene_type)
-            combo.currentTextChanged.connect(
-                lambda text, sid=s.seq_id: self._on_gene_type(sid, text))
-            self.table.setCellWidget(row, 2, combo)
-        self.table.blockSignals(False)
 
     def _add_files_dialog(self):
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Select FASTA files", "",
             "FASTA (*.fasta *.fa *.fna *.ffn *.faa *.txt);;All files (*)")
         if paths:
-            self.add_fasta_paths(paths)
+            self.import_box.load_paths(paths)
 
-    def _remove_selected(self):
-        rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
-        for row in rows:
-            sid = self.table.item(row, 0).text()
-            self.win.remove_sequence(sid)
-        self.refresh()
+    # ---- 刷新 ----
+    def refresh(self):
+        """本页不再列出已入库序列：页眉右侧给出条数，明细见状态栏与后续页面。"""
+        n = len(self.win.sequences)
+        self.lbl_count.setText(f"{n} sequence(s) imported" if n else "")
 
     def _clear(self):
         if self.win.sequences and QMessageBox.question(
@@ -188,26 +224,3 @@ class PageImport(QWidget):
         self.win.sequences.clear()
         self.win.reset_results()
         self.refresh()
-
-    def _on_item_changed(self, item):
-        row = item.row()
-        if row >= len(self.win.sequences):
-            return
-        s = self.win.sequences[row]
-        if item.column() == 0:
-            old = s.seq_id
-            new = item.text().strip()
-            if new and new != old:
-                s.seq_id = new
-                self.win.rename_sequence(old, new)
-
-    def _on_gene_type(self, seq_id, text):
-        self.win.set_gene_type(seq_id, "" if text == "Custom" else text)
-
-    def _apply_source_to_all(self):
-        quals = {k: e.text().strip() for k, e in self.source_edits.items()
-                 if e.text().strip()}
-        self.win.apply_source_to_all(quals)
-        QMessageBox.information(self, "Applied",
-                                f"Applied {len(quals)} modifier(s) to "
-                                f"{len(self.win.sequences)} sequence(s)")

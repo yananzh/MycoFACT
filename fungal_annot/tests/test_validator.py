@@ -39,28 +39,6 @@ def test_low_identity_gate(ref_record_seq, ref_gb_text):
     assert res.status == "red"
 
 
-def test_modifier_format_errors(ref_record_seq, ref_gb_text):
-    seq, _ = ref_record_seq
-    q = seq[300:1600]
-    s = SeqInput(seq_id="ok_seq", seq=q, gene_type="tef1",
-                 source_qualifiers={"organism": "Fusarium testicum",
-                                    "collection_date": "2021/03/15",   # 非法格式
-                                    "lat_lon": "12N45E"})              # 非法格式
-    res = annotate_sequence(s, CFG, reference_gb_text=ref_gb_text)
-    assert "modifier_format" in _codes(res, "error")
-    assert "modifier_missing" in _codes(res, "warning")   # 缺 country
-
-
-def test_unknown_country_downgrades_to_warning(ref_record_seq, ref_gb_text):
-    seq, _ = ref_record_seq
-    q = seq[300:1600]
-    s = SeqInput(seq_id="ok_seq", seq=q, gene_type="tef1",
-                 source_qualifiers={"organism": "Fusarium testicum",
-                                    "country": "Atlantis"})
-    res = annotate_sequence(s, CFG, reference_gb_text=ref_gb_text)
-    assert "country_unverified" in _codes(res, "warning")
-
-
 def test_seqid_invalid(ref_record_seq, ref_gb_text):
     seq, _ = ref_record_seq
     q = seq[300:1600]
@@ -87,7 +65,6 @@ def test_transl_table_conflict_warning(ref_record_seq, ref_gb_text):
 
 
 def test_preset_unknown_is_red():
-    from fungal_annot.core.models import Issue
     s = SeqInput(seq_id="x", seq="ACGT", gene_type="nonexist")
     res = annotate_sequence(s, CFG, reference_gb_text="dummy")
     assert res.status == "red"

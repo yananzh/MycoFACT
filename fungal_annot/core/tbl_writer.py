@@ -33,7 +33,8 @@ def feature_lines(feat) -> list[str]:
         lines.append(f"{left}\t{right}\t{feat.ftype}")
     for k, vals in feat.qualifiers.items():
         for v in vals:
-            lines.append(f"\t\t{k}\t{v}")
+            # 五列格式：列 1-3 留空，qualifier 在列 4、值在列 5（三个前导制表符）
+            lines.append(f"\t\t\t{k}\t{v}")
     return lines
 
 

@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 测试 / 覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 打包产物（M6 PyInstaller）
+build/
+dist/
+*.spec.bak
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 生成物：演示输出与在线测试输出（可由脚本重新生成）
+demo_out/
+online_test/out/
+online_test/out2/
+
+# 根目录调试截图（_*.png）
+/_*.png
+
+# 系统文件
+Thumbs.db
+.DS_Store

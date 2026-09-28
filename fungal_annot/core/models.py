@@ -47,6 +47,7 @@ class Feature:
     strand: int = 1                                 # +1 / -1（宿主序列坐标系）
     parts: list = field(default_factory=list)       # [FeaturePart]，按 start 升序
     qualifiers: dict = field(default_factory=dict)  # key -> [str, ...]
+    ref_key: tuple | None = None                    # 迁移结果：来源参考 feature 的坐标区间
 
     @property
     def start(self):

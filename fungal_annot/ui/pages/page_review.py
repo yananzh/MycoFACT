@@ -2,7 +2,7 @@
 结构化验证报告（带修复提示）、比对视图、红灯人工确认。
 Phase 3 新手友好：issue 带图标与建议动作，术语就地解释（? 帮助卡）。"""
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont, QTextCursor
+from PyQt6.QtGui import QColor, QTextCursor
 from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QListWidget,
                              QListWidgetItem, QMessageBox, QPlainTextEdit,
                              QPushButton, QVBoxLayout, QWidget)
@@ -50,46 +50,65 @@ HINTS = {
 
 
 def _alignment_text(mapping, ref_seq, width: int = 60) -> str:
-    """参考 vs 查询（RC 空间）文本比对，indel 以 '-' 展示（§7.2 P4 查看比对）。"""
-    ref_lines, q_lines, m_lines = [], [], []
-    prev_r, prev_q = 0, 0
+    """参考 vs 查询（RC 空间）逐列比对文本。
+
+    列坐标逐列跟踪：行首标签为该行第一个有坐标列的真实参考/查询坐标；
+    仅渲染对齐区间（端部侧翼不显示，内部 indel 完整展示）。
+    三行前缀宽度一致（11 列），'|' 与碱基逐列对齐。
+    """
+    r_chars, q_chars, m_chars = [], [], []
+    r_coord, q_coord = [], []          # 每列的参考/查询坐标（gap 列为 None）
+    prev_re = prev_qe = None
     for (rs, re_, qs, qe) in mapping.blocks:
-        gref = (rs - 1) - prev_r
-        gq = (qs - 1) - prev_q
-        w = max(gref, gq)
-        if w:
-            ref_lines.append(ref_seq[prev_r:rs - 1].ljust(w, "-"))
-            q_lines.append(mapping.query_seq[prev_q:qs - 1].rjust(w, "-"))
-            m_lines.append(" " * w)
-        ref_lines.append(ref_seq[rs - 1:re_])
-        q_lines.append(mapping.query_seq[qs - 1:qe])
-        m_lines.append("".join("|" if a == b else " "
-                               for a, b in zip(ref_seq[rs - 1:re_],
-                                               mapping.query_seq[qs - 1:qe])))
-        prev_r, prev_q = re_, qe
-    ref_s, q_s, m_s = "".join(ref_lines), "".join(q_lines), "".join(m_lines)
+        if prev_re is not None:
+            gref = rs - prev_re - 1            # 查询侧缺失（deletion）
+            gq = qs - prev_qe - 1              # 查询侧插入（insertion）
+            w = max(gref, gq)
+            rseg = ref_seq[prev_re:rs - 1]
+            qseg = mapping.query_seq[prev_qe:qs - 1]
+            for j in range(w):
+                r_have = j < gref
+                q_have = j >= (w - gq)
+                r_chars.append(rseg[j] if r_have else "-")
+                q_chars.append(qseg[j - (w - gq)] if q_have else "-")
+                m_chars.append(" ")
+                r_coord.append(prev_re + 1 + j if r_have else None)
+                q_coord.append(prev_qe + 1 + (j - (w - gq)) if q_have else None)
+        for k in range(re_ - rs + 1):
+            a = ref_seq[rs - 1 + k]
+            b = mapping.query_seq[qs - 1 + k]
+            r_chars.append(a)
+            q_chars.append(b)
+            m_chars.append("|" if a == b else " ")
+            r_coord.append(rs + k)
+            q_coord.append(qs + k)
+        prev_re, prev_qe = re_, qe
+
+    total = len(r_chars)
     out = []
-    for i in range(0, len(ref_s), width):
-        out.append(f"ref {i + 1:>8}  {ref_s[i:i + width]}")
-        out.append(f"{'':>13}  {m_s[i:i + width]}")
-        out.append(f"qry {i + 1:>8}  {q_s[i:i + width]}")
+    for i in range(0, total, width):
+        chunk = range(i, min(i + width, total))
+        r_lab = next((str(r_coord[j]) for j in chunk if r_coord[j] is not None), "-")
+        q_lab = next((str(q_coord[j]) for j in chunk if q_coord[j] is not None), "-")
+        out.append(f"R {r_lab:>7}  {''.join(r_chars[i:i + width])}")
+        out.append(f"{'':>9}  {''.join(m_chars[i:i + width])}")
+        out.append(f"Q {q_lab:>7}  {''.join(q_chars[i:i + width])}")
         out.append("")
     head = ("Orientation: reverse complement (query shown on its RC strand)"
             if mapping.orientation == "reverse" else "Orientation: forward")
-    return head + "\n\n" + "\n".join(out)
+    return head + "  (| = match)\n\n" + "\n".join(out)
 
 
 class AlignmentDialog(QDialog):
-    def __init__(self, text, parent=None):
+    def __init__(self, title: str, text: str, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Reference vs Query - alignment view")
+        self.setWindowTitle(title)
         self.resize(960, 640)
         v = QVBoxLayout(self)
         view = QPlainTextEdit()
+        view.setObjectName("MonoViewer")   # QSS 等宽字体规则的目标（setFont 会被全局 QSS 覆盖）
         view.setReadOnly(True)
-        font = QFont("Consolas")
-        font.setStyleHint(QFont.StyleHint.Monospace)
-        view.setFont(font)
+        view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         view.setPlainText(text)
         view.moveCursor(QTextCursor.MoveOperation.Start)
         v.addWidget(view)
@@ -99,7 +118,7 @@ class AlignmentDialog(QDialog):
 
 
 class PageReview(QWidget):
-    title = "4. Review & Edit"
+    title = "4. Review"         # 步骤条标签：水平等宽排布下需要短标签
 
     def __init__(self, win):
         super().__init__()
@@ -144,8 +163,12 @@ class PageReview(QWidget):
         b_reval.clicked.connect(self._revalidate)
         b_align = QPushButton("View alignment")
         b_align.clicked.connect(self._show_alignment)
+        b_ref_feat = QPushButton(icon("fa5s.table"), "View reference features")
+        b_ref_feat.setToolTip("Show the reference record's own five-column feature table")
+        b_ref_feat.clicked.connect(self._show_reference_features)
         btns.addWidget(b_reval)
         btns.addWidget(b_align)
+        btns.addWidget(b_ref_feat)
         btns.addWidget(HelpButton("partial"))
         btns.addWidget(HelpButton("codon_start"))
         btns.addStretch(1)
@@ -289,11 +312,38 @@ class PageReview(QWidget):
             f"Confirm [{sid}] is ready for submission (optional note, recorded in log):")
         return (text.strip(), ok)
 
+    def _reference_features_text(self):
+        """参考记录自身的五列 feature table（含原 qualifier，只读对照用）。"""
+        res = self.win.results.get(self.current) if self.current else None
+        if res is None or res.detail is None:
+            return None
+        d = res.detail
+        features = list(d.ref_features)
+        if d.ref_len:
+            from ...core.models import Feature as _F, FeaturePart as _P
+            src_f = _F(ftype="source", strand=1,
+                       parts=[_P(1, d.ref_len)], qualifiers=d.ref_source_quals)
+            features = [src_f] + features
+        acc = res.provenance.reference or "reference"
+        return write_tbl(features, acc)
+
+    def _show_reference_features(self):
+        text = self._reference_features_text()
+        if text is None:
+            QMessageBox.information(self, "No reference features",
+                                    "The current result lacks alignment context (loaded from "
+                                    "a project file). Re-annotate in step 3 first.")
+            return
+        acc = self.win.results[self.current].provenance.reference or "reference"
+        dlg = AlignmentDialog(f"Reference features - {acc}", text, self)
+        dlg.exec()
+
     def _show_alignment(self):
         res = self.win.results.get(self.current) if self.current else None
         if res is None or res.detail is None:
             QMessageBox.information(self, "No alignment",
                                     "Missing alignment context (annotate in this session first).")
             return
-        dlg = AlignmentDialog(_alignment_text(res.detail.mapping, res.detail.ref_seq), self)
+        dlg = AlignmentDialog("Reference vs Query - alignment view",
+                              _alignment_text(res.detail.mapping, res.detail.ref_seq), self)
         dlg.exec()

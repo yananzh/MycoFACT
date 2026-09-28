@@ -3,8 +3,6 @@
 比对范围约束：调用方必须传入已截取的参考窗口（短参考可整体），
 禁止对未截取的长记录做全序列比对。
 """
-import bisect
-
 from Bio.Align import PairwiseAligner
 from Bio.Seq import Seq
 
