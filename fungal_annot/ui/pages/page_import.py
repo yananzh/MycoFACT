@@ -1,5 +1,6 @@
-"""P1 序列导入页（§7.2）：统一导入输入框——支持直接粘贴序列文本（FASTA 或裸
-序列），也支持把 FASTA 文件拖入框内（内容读入框中），统一点 Import 解析入库。
+"""P1 导入 & BLAST 页（§7.2 + 2026-09-28 合并页改造）：统一导入输入框——支持直接
+粘贴序列文本（FASTA 或裸序列），也支持把 FASTA 文件拖入框内；四按钮
+BLAST/Browse/Clear/STOP，点 BLAST 自动导入框内文本并启动在线 BLAST 队列。
 source 修饰符不在本页采集——BankIt 门户模式下由门户表单录入（§7.2 P5）。"""
 import io
 import os
@@ -153,12 +154,6 @@ class PageImport(QWidget):
         layout.setSpacing(10)
 
         header = QHBoxLayout()
-        icon_label = QLabel()
-        icon_label.setPixmap(icon("fa5s.file-import", "#2D7DD2").pixmap(20, 20))
-        title = QLabel("Import sequences — paste text or drag & drop FASTA files into the box")
-        title.setObjectName("PageTitle")
-        header.addWidget(icon_label)
-        header.addWidget(title)
         header.addStretch(1)
         self.lbl_count = QLabel("")
         self.lbl_count.setObjectName("Hint")
@@ -172,71 +167,39 @@ class PageImport(QWidget):
         layout.addWidget(self.import_box, 1)
 
         row = QHBoxLayout()
-        self.b_import = QPushButton(icon("fa5s.check", "#ffffff"), "Import")
-        self.b_import.setObjectName("PrimaryButton")
-        self.b_import.setToolTip("Parse the box content and add the sequences to the project")
-        self.b_import.clicked.connect(self._import_box)
-        b_browse = QPushButton(icon("fa5s.folder-open", "#ffffff"), "Browse")
-        b_browse.setObjectName("PrimaryButton")
+        self.b_blast = QPushButton(icon("fa5s.play", "#ffffff"), "BLAST")
+        self.b_blast.setObjectName("PrimaryButton")
+        self.b_blast.setToolTip("Import the box content (if any) and start online BLAST")
+        self.b_blast.clicked.connect(self._start)
+        b_browse = QPushButton(icon("fa5s.folder-open", "#57606a"), "Browse")
         b_browse.setToolTip("Pick FASTA files and load them into the box")
         b_browse.clicked.connect(self._add_files_dialog)
-        b_clear = QPushButton(icon("fa5s.broom", "#ffffff"), "Clear")
-        b_clear.setObjectName("PrimaryButton")
+        b_clear = QPushButton(icon("fa5s.broom", "#57606a"), "Clear")
         b_clear.setToolTip("Remove all imported sequences")
         b_clear.clicked.connect(self._clear)
-        row.addWidget(self.b_import)
+        self.b_stop = QPushButton("STOP")
+        self.b_stop.clicked.connect(self._cancel)
+        self.b_stop.setEnabled(False)
+        row.addWidget(self.b_blast)
         row.addWidget(b_browse)
         row.addWidget(b_clear)
+        row.addWidget(self.b_stop)
         row.addStretch(1)
         layout.addLayout(row)
 
-        # ---- BLAST 区（自 BLAST 页并入，在线部分）----
-        chips = QHBoxLayout()
-        self.chip_db = QLabel("-")
-        self.chip_db.setObjectName("Chip")
-        self.chip_queue = QLabel("-")
-        self.chip_queue.setObjectName("Chip")
-        chips.addWidget(self.chip_db)
-        chips.addWidget(self.chip_queue)
-        chips.addStretch(1)
-        chips.addWidget(HelpButton("identity"))
-        layout.addLayout(chips)
-
+        # ---- 状态提示（BLAST 区）----
+        hint_row = QHBoxLayout()
         self.lbl_hint = QLabel("")
         self.lbl_hint.setObjectName("Hint")
         self.lbl_hint.setWordWrap(True)
-        layout.addWidget(self.lbl_hint)
+        hint_row.addWidget(self.lbl_hint, 1)
+        hint_row.addWidget(HelpButton("identity"))
+        layout.addLayout(hint_row)
 
         self.progress = QProgressBar()
         layout.addWidget(self.progress)
 
-        b_row = QHBoxLayout()
-        self.b_start = QPushButton(icon("fa5s.play", "#ffffff"), "Start BLAST")
-        self.b_start.setObjectName("PrimaryButton")
-        self.b_start.clicked.connect(self._start)
-        self.b_cancel = QPushButton("Cancel pending")
-        self.b_cancel.clicked.connect(self._cancel)
-        self.b_cancel.setEnabled(False)
-        b_row.addWidget(self.b_start)
-        b_row.addWidget(self.b_cancel)
-        b_row.addStretch(1)
-        layout.addLayout(b_row)
-
-        self.refresh()
-
-    # ---- 导入 ----
-    def _import_box(self):
-        try:
-            seqs = parse_pasted_input(self.import_box.toPlainText())
-        except ValueError as ex:
-            QMessageBox.warning(self, "Invalid input", str(ex))
-            return
-        try:
-            for s in seqs:
-                self.win.add_sequence(s)
-        except ValueError as ex:
-            QMessageBox.warning(self, "Import failed", str(ex))
-        self.import_box.clear()
+        self.import_box.textChanged.connect(self.refresh)
         self.refresh()
 
     def _add_files_dialog(self):
@@ -248,36 +211,43 @@ class PageImport(QWidget):
 
     # ---- 刷新 ----
     def refresh(self):
-        """页眉导入计数 + BLAST 区状态（徽章、提示、Start 禁用条件）。"""
+        """页眉计数 + BLAST 区状态（提示、BLAST 禁用条件）。"""
         n = len(self.win.sequences)
         self.lbl_count.setText(f"{n} sequence(s) imported" if n else "")
 
-        cfg = self.win.make_config()
-        self.chip_db.setText(f"Database: {cfg.blast_db}")
-        self.chip_queue.setText(
-            f"{n} queued · ~{max(1, n * 3)} min" if n else "no sequences yet")
-        email_ok = bool(cfg.email)
+        email_ok = bool(self.win.make_config().email)
+        has_input = bool(self.import_box.toPlainText().strip())
         reason = ""
-        if not n:
-            reason = "Import FASTA files first. "
+        if not n and not has_input:
+            reason = "Paste FASTA or drag & drop files first. "
         elif self.win._blast_pending > 0:
             reason = "BLAST queue is running - wait for it to finish. "
         elif not email_ok:
             reason = "Set your NCBI contact email in Tools ▸ Settings first. "
-        self.b_start.setEnabled(n > 0 and email_ok and self.win._blast_pending == 0)
-        self.b_start.setToolTip("" if self.b_start.isEnabled()
+        self.b_blast.setEnabled((n > 0 or has_input) and email_ok
+                                and self.win._blast_pending == 0)
+        self.b_blast.setToolTip("" if self.b_blast.isEnabled()
                                 else reason.strip() or "not ready")
         self.lbl_hint.setText(reason + "Online BLAST takes ~1-5 min per sequence "
                                        "(serial, rate-limited queue).")
 
-    # ---- BLAST 任务 ----
+    # ---- BLAST 任务（点击即自动导入框内文本并启动）----
     def _start(self):
-        if not self.b_start.isEnabled():
+        if not self.b_blast.isEnabled():
             return
+        if self.import_box.toPlainText().strip():
+            try:
+                seqs = parse_pasted_input(self.import_box.toPlainText())
+                for s in seqs:
+                    self.win.add_sequence(s)
+            except ValueError as ex:
+                QMessageBox.warning(self, "Invalid input", str(ex))
+                return
+            self.import_box.clear()         # textChanged → refresh
         # 先置按钮状态再提交：队列可能同步排空（全部已有 hits），
         # 由 on_queue_finished 的刷新决定最终态（见 ledger ruling）
-        self.b_start.setEnabled(False)
-        self.b_cancel.setEnabled(True)
+        self.b_blast.setEnabled(False)
+        self.b_stop.setEnabled(True)
         self.win.start_blast()
 
     def _cancel(self):
@@ -285,7 +255,7 @@ class PageImport(QWidget):
 
     def on_queue_finished(self):
         self.progress.setValue(self.progress.maximum())
-        self.b_cancel.setEnabled(False)
+        self.b_stop.setEnabled(False)
         self.refresh()
 
     def _clear(self):

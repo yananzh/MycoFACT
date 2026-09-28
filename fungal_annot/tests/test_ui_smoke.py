@@ -124,8 +124,8 @@ def test_blast_all_have_hits_jumps_immediately(window):
     window.page_import.refresh()
     window.page_import._start()
     assert window.stack.currentIndex() == 1          # 自动进入 Reference
-    assert not window.page_import.b_cancel.isEnabled()
-    assert window.page_import.b_start.isEnabled()
+    assert not window.page_import.b_stop.isEnabled()
+    assert window.page_import.b_blast.isEnabled()
 
 
 def test_blast_failure_drain_jumps(window):
@@ -138,7 +138,7 @@ def test_blast_failure_drain_jumps(window):
     window._on_worker_failed("s1", "boom")
     assert window._blast_pending == 0
     assert window.stack.currentIndex() == 1
-    assert not window.page_import.b_cancel.isEnabled()
+    assert not window.page_import.b_stop.isEnabled()
 
 
 def test_blast_success_drain_jumps(window):
@@ -155,7 +155,7 @@ def test_blast_success_drain_jumps(window):
     assert window._blast_pending == 0
     assert window.hits["s1"] == [hit]
     assert window.stack.currentIndex() == 1
-    assert not window.page_import.b_cancel.isEnabled()
+    assert not window.page_import.b_stop.isEnabled()
 
 
 def test_blast_finish_after_discard_stays_put(window):
@@ -183,10 +183,10 @@ def test_start_blast_disabled_while_queue_running(window):
     window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
     window._blast_pending = 1
     window.page_import.refresh()
-    assert not window.page_import.b_start.isEnabled()
+    assert not window.page_import.b_blast.isEnabled()
     window._blast_pending = 0
     window.page_import.refresh()
-    assert window.page_import.b_start.isEnabled()
+    assert window.page_import.b_blast.isEnabled()
 
 
 def test_import_and_remove(window):
@@ -365,65 +365,77 @@ def test_parse_pasted_input():
         parse_pasted_input("ACGTX")   # X 非核苷酸字符
 
 
-def test_import_box_flow(window, tmp_path):
-    """统一输入框：文件拖入读入框内 → Import 解析入库并清空。"""
+def test_import_box_flow(window):
+    """统一输入框：点 BLAST 自动导入框内文本并清空（预置 hits → 同步排空无网络）。"""
+    from fungal_annot.core.blast_runner import BlastHit
     from fungal_annot.core.models import SeqInput
 
+    hit = [BlastHit(accession="AA000001", title="hit", pident=99.0,
+                    qcovs=100.0, subject_len=100, flags={})]
     window.add_sequence(SeqInput(seq_id="g1", seq="ACGT" * 50))
+    window.hits["g1"] = hit                        # 防止真实网络请求
+    window.settings["email"] = "a@example.org"
     window.page_import.refresh()
     assert window.page_import.lbl_count.text() == "1 sequence(s) imported"
 
     box = window.page_import.import_box
     box.setPlainText(">s9\nACGTACGTACGT")
-    window.page_import._import_box()
+    window.hits["s9"] = hit                        # 防止真实网络请求
+    window.page_import.refresh()
+    window.page_import._start()                    # BLAST = 自动导入 + 启动
     assert window.sequences[-1].seq_id == "s9"
-    assert box.toPlainText() == ""          # 导入成功后清空
-    # 重复导入同一 Seq ID → 报错且不清空
-    box.setPlainText(">s9\nACGTACGTACGT")
-    window.page_import._import_box()
-    assert box.toPlainText() != ""
+    assert box.toPlainText() == ""                 # 导入成功后清空
+    assert window.stack.currentIndex() == 1        # 全有 hits → 同步排空跳转
 
 
 def test_import_page_has_no_sequence_table(window):
-    """P1 简化：去掉序列表格与 Paste from clipboard / Remove selected 按钮；
-    导入三键统一主按钮样式、单词标签（BLAST 区按钮为合并页新增，另计）。"""
+    """P1 简化：无序列表格；四按钮 BLAST/Browse/Clear/STOP 水平排列，
+    仅 BLAST 为主按钮样式（次级描边为默认）。"""
     from PyQt6.QtWidgets import QPushButton, QTableWidget
 
     page = window.page_import
     assert page.findChildren(QTableWidget) == []
     buttons = page.findChildren(QPushButton)
-    assert [b.text() for b in buttons] == ["Import", "Browse", "Clear",
-                                           "Start BLAST", "Cancel pending"]
-    assert buttons[0].objectName() == "PrimaryButton"
-    assert buttons[1].objectName() == "PrimaryButton"
-    assert buttons[2].objectName() == "PrimaryButton"
-    assert buttons[3].objectName() == "PrimaryButton"      # Start BLAST 主按钮
+    assert [b.text() for b in buttons] == ["BLAST", "Browse", "Clear", "STOP"]
+    assert buttons[0].objectName() == "PrimaryButton"      # BLAST 主行动
+    assert all(b.objectName() == "" for b in buttons[1:])  # 其余默认描边
     assert not hasattr(page, "_remove_selected") and not hasattr(page, "_paste_clipboard")
 
 
 def test_import_page_blast_section(window):
-    """合并页 BLAST 区：无模式卡片/无 Next 按钮；Start 禁用条件（无序列/无 email）。"""
+    """合并页：四按钮 BLAST/Browse/Clear/STOP；无 chips、无页标题、无 Import 键；
+    BLAST 禁用条件（无序列且框空 / 无 email / 队列运行中）。"""
+    from PyQt6.QtWidgets import QLabel
     from fungal_annot.core.models import SeqInput
 
     page = window.page_import
-    assert hasattr(page, "b_start") and page.b_start.text() == "Start BLAST"
-    assert hasattr(page, "b_cancel") and hasattr(page, "progress")
-    assert hasattr(page, "chip_db") and hasattr(page, "chip_queue")
-    assert hasattr(page, "lbl_hint") and hasattr(page, "on_queue_finished")
-    assert not hasattr(page, "btn_mode_offline") and not hasattr(page, "mode_stack")
-    assert not hasattr(page, "b_next") and not hasattr(page, "chip_mode")
+    assert hasattr(page, "b_blast") and page.b_blast.text() == "BLAST"
+    assert hasattr(page, "b_stop") and page.b_stop.text() == "STOP"
+    assert hasattr(page, "progress") and hasattr(page, "on_queue_finished")
+    assert hasattr(page, "lbl_hint")
+    assert not hasattr(page, "chip_db") and not hasattr(page, "chip_queue")
+    assert not hasattr(page, "b_import") and not hasattr(page, "b_cancel")
+    assert not hasattr(page, "b_start")
+    titles = [l for l in page.findChildren(QLabel) if l.objectName() == "PageTitle"]
+    assert titles == []                             # 页标题标签已移除
 
     page.refresh()
-    assert not page.b_start.isEnabled()                 # 无序列
-    window.settings["email"] = ""                       # 隔离用户本机已保存的 Settings
+    assert not page.b_blast.isEnabled()             # 无序列且框为空
+    window.settings["email"] = ""                    # 隔离用户本机已保存的 Settings
     window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
     page.refresh()
-    assert not page.b_start.isEnabled()                 # 未设 email
-    assert "Settings" in page.b_start.toolTip()
+    assert not page.b_blast.isEnabled()             # 未设 email
+    assert "Settings" in page.b_blast.toolTip()
     window.settings["email"] = "a@example.org"
     page.refresh()
-    assert page.b_start.isEnabled()
-    assert not page.b_cancel.isEnabled()
+    assert page.b_blast.isEnabled()
+    assert not page.b_stop.isEnabled()
+    # 框内有文本 → 无序列也可点（点击时自动导入）
+    window.sequences.clear()
+    page.refresh()
+    assert not page.b_blast.isEnabled()
+    page.import_box.setPlainText(">x\nACGTACGTACGT")   # textChanged → 自动 refresh
+    assert page.b_blast.isEnabled()
 
 
 def test_import_box_loads_dropped_file(window, ref_record_seq, ref_gb_text, tmp_path):
