@@ -99,13 +99,13 @@ def _spliced_cds(parts, strand: int, seq: str) -> str:
     return s
 
 
-def transfer_features(ref_features, mapping, query_len: int, preset,
-                      auto_partial: bool = True, user_transl_table: int | None = None,
-                      query_seq: str = "") -> TransferOutcome:
+def transfer_features(ref_features, mapping, query_len: int,
+                      auto_partial: bool = True, query_seq: str = "") -> TransferOutcome:
     """将参考 feature 迁移到查询序列（宿主坐标）。
 
     ref_features 顺序保持；无法迁移的 feature 跳过并记 issue，
     因此输出的 CDS 列表与 ref 中 CDS 列表可能不同长——validator 按 CDS 顺序配对。
+    CDS 恒显式输出 codon_start（含 =1）；transl_table 不写入 .tbl。
     """
     lo, hi = mapping.aligned_ref_interval
     out, issues = [], []
@@ -240,11 +240,7 @@ def transfer_features(ref_features, mapping, query_len: int, preset,
                     vals = [_rewrite_note(v, is_partial) for v in vals]
                 new_q[k] = list(vals)
         if is_cds:
-            table, _conflict, _certain = resolve_transl_table(feat, preset, user_transl_table)
-            if table is not None:
-                new_q["transl_table"] = [str(table)]
-            if cs_val > 1:
-                new_q["codon_start"] = [str(cs_val)]
+            new_q["codon_start"] = [str(cs_val)]   # 恒写（含 =1，显式相位）
 
         spans = [(p.ref_start, p.ref_end) for p in conv if p.ref_start and p.ref_end]
         ref_key = ((min(s for s, _ in spans), max(e for _, e in spans))

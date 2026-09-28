@@ -33,11 +33,11 @@ def test_codon_start_formula():
 
 def test_qualifier_triage(ref_record_seq, ref_gb_text):
     """§6.5 三分表：product/gene 继承；protein_id/locus_tag/db_xref/translation 丢弃；
-    codon_start 重算不继承；note 的 complete 断言改写。"""
+    codon_start 重算不继承且恒写；transl_table 不再输出；note 的 complete 断言改写。"""
     seq, _ = ref_record_seq
     q = seq[300:1600]
     feats, m, preset = _setup(ref_gb_text, q)
-    out = transfer_features(feats, m, len(q), preset, query_seq=q)
+    out = transfer_features(feats, m, len(q), query_seq=q)
     cds = next(f for f in out.features if f.ftype == "CDS")
     assert cds.qualifiers["gene"] == ["tef1"]
     assert cds.qualifiers["product"] == ["translation elongation factor 1-alpha"]
@@ -45,7 +45,7 @@ def test_qualifier_triage(ref_record_seq, ref_gb_text):
     assert "locus_tag" not in cds.qualifiers
     assert "db_xref" not in cds.qualifiers
     assert "translation" not in cds.qualifiers
-    assert cds.qualifiers["transl_table"] == ["1"]
+    assert "transl_table" not in cds.qualifiers
     assert cds.qualifiers["codon_start"] == ["3"]
     assert cds.qualifiers["note"] == ["partial cds"]
 
@@ -54,7 +54,7 @@ def test_partial_and_coordinates(ref_record_seq, ref_gb_text):
     seq, _ = ref_record_seq
     q = seq[300:1600]
     feats, m, preset = _setup(ref_gb_text, q)
-    out = transfer_features(feats, m, len(q), preset, query_seq=q)
+    out = transfer_features(feats, m, len(q), query_seq=q)
     cds = next(f for f in out.features if f.ftype == "CDS")
     gene = next(f for f in out.features if f.ftype == "gene")
     # exon1 5' 侧在覆盖区外 → 裁剪 + partial；exon2 完整映射
@@ -74,7 +74,7 @@ def test_reverse_strand_combination(ref_record_seq, ref_gb_text):
     q = revcomp(seq[300:1600])
     feats, m, preset = _setup(ref_gb_text, q)
     assert m.orientation == "reverse"
-    out = transfer_features(feats, m, len(q), preset, query_seq=q)
+    out = transfer_features(feats, m, len(q), query_seq=q)
     cds = next(f for f in out.features if f.ftype == "CDS")
     assert cds.strand == -1
     assert [(p.start, p.end) for p in cds.parts] == [(452, 900), (1001, 1300)]
@@ -89,7 +89,7 @@ def test_exon_map_fail_is_error(ref_record_seq, ref_gb_text):
     seq, _ = ref_record_seq
     q = seq[300:700] + seq[1149:1600]           # 查询缺失 exon2 对应区域
     feats, m, preset = _setup(ref_gb_text, q)
-    out = transfer_features(feats, m, len(q), preset, query_seq=q)
+    out = transfer_features(feats, m, len(q), query_seq=q)
     codes = {i.code for i in out.issues}
     assert "exon_map_fail" in codes
     assert any(i.level == "error" for i in out.issues if i.code == "exon_map_fail")
@@ -102,19 +102,19 @@ def test_complete_cds_partial_exemption(ref_record_seq, ref_gb_text):
     seq, _ = ref_record_seq
     q = seq[200:1149]                            # 完整 CDS 区间（含内含子）
     feats, m, preset = _setup(ref_gb_text, q)
-    out = transfer_features(feats, m, len(q), preset, query_seq=q)
+    out = transfer_features(feats, m, len(q), query_seq=q)
     cds = next(f for f in out.features if f.ftype == "CDS")
     assert [(p.start, p.end) for p in cds.parts] == [(1, 400), (501, 949)]
     assert cds.parts[0].partial_low is False
     assert cds.parts[-1].partial_high is False
-    assert "codon_start" not in cds.qualifiers   # m=0 → 省略（默认 1）
+    assert cds.qualifiers.get("codon_start") == ["1"]    # m=0 → 恒写（显式相位）
 
 
 def test_auto_partial_off(ref_record_seq, ref_gb_text):
     seq, _ = ref_record_seq
     q = seq[300:1600]
     feats, m, preset = _setup(ref_gb_text, q)
-    out = transfer_features(feats, m, len(q), preset, auto_partial=False, query_seq=q)
+    out = transfer_features(feats, m, len(q), auto_partial=False, query_seq=q)
     gene = next(f for f in out.features if f.ftype == "gene")
     assert gene.parts[0].partial_low is True     # 结构性 partial（裁剪）仍在
     # CDS 5' 结构性 partial 来自裁剪，保持；无额外 auto 标记

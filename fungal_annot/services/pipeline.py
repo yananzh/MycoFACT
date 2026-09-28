@@ -177,9 +177,8 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
         if progress:
             progress("transfer", 0.7)
         ref_features = extract_features(rec, preset)
-        outcome = transfer_features(ref_features, mapping, L, preset,
+        outcome = transfer_features(ref_features, mapping, L,
                                     auto_partial=cfg.auto_partial,
-                                    user_transl_table=cfg.user_transl_table,
                                     query_seq=seq_input.seq)
 
         # ---- 4. 验证（source 不在 .tbl 中，由 BankIt 门户采集，§7.2）----

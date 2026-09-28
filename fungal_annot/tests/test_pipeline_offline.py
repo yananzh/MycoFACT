@@ -87,8 +87,8 @@ def test_autodetect_from_offline_reference(partial_ref_gb):
 
 
 def test_generic_fallback_when_gene_unrecognized(two_cds_gb):
-    """不在预设列表的基因：Generic 兜底——宽白名单照常迁移，密码表只取参考
-    qualifier（12），并给出要求人工确认的 warning。"""
+    """不在预设列表的基因：Generic 兜底——宽白名单照常迁移，并给出要求人工
+    确认的 warning；.tbl 不再输出 transl_table。"""
     rec = SeqIO.read(io.StringIO(two_cds_gb), "genbank")
     q = str(rec.seq)[1150:1850]                    # 覆盖 CDS-B
     res = annotate_sequence(_mk(q, gene_type=""), CFG,
@@ -97,7 +97,7 @@ def test_generic_fallback_when_gene_unrecognized(two_cds_gb):
     assert "gene_type_generic" in codes
     cds = [f for f in res.features if f.ftype == "CDS"]
     assert len(cds) == 1
-    assert cds[0].qualifiers.get("transl_table") == ["12"]   # 只来自参考 qualifier
+    assert cds[0].qualifiers.get("transl_table") is None   # 输出不含 transl_table
     assert res.status in ("green", "yellow")
 
 
@@ -151,10 +151,20 @@ def test_cds_pairing_by_reference_coordinates(two_cds_gb):
     res = annotate_sequence(_mk(q), CFG, reference_gb_text=two_cds_gb)
     cds = [f for f in res.features if f.ftype == "CDS"]
     assert len(cds) == 1                           # CDS-A 在覆盖区外，已跳过
-    assert cds[0].qualifiers.get("transl_table") == ["12"]   # 取自 CDS-B 自身
+    assert cds[0].qualifiers.get("transl_table") is None   # 输出不含 transl_table
     codes = {i.code for i in res.issues}
     assert "protein_identity" not in codes         # 配对错误时该警告会误报
     assert "transl_table_conflict" not in codes
+
+
+def test_complete_cds_tbl_codon_start_no_transl_table(ref_record_seq, ref_gb_text):
+    """用户验收：.tbl 的 CDS 恒显式写 codon_start（含 =1），且不输出 transl_table。"""
+    seq, _ = ref_record_seq
+    q = seq[200:1149]                              # 完整 CDS 区间（m=0 → codon_start=1）
+    res = annotate_sequence(_mk(q), CFG, reference_gb_text=ref_gb_text)
+    tbl = res.tbl_text
+    assert "\t\t\tcodon_start\t1" in tbl
+    assert "\t\t\ttransl_table" not in tbl
 
 
 def test_end_to_end_reverse(ref_record_seq, ref_gb_text):
