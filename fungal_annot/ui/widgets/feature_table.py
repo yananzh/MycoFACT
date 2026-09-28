@@ -91,6 +91,14 @@ class FeatureTable(QTableWidget):
         self.setHorizontalHeaderLabels(_COL_TYPES)
         self.horizontalHeader().setDefaultAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # 列头就地解释（替代散落的 ? 帮助按钮）
+        self.horizontalHeaderItem(0).setToolTip("Feature key: CDS, gene, rRNA ...")
+        self.horizontalHeaderItem(1).setToolTip("Strand: + forward, - reverse complement")
+        self.horizontalHeaderItem(2).setToolTip(
+            "GenBank ranges, e.g. <1..300, 401..520 - '<' / '>' mark partial ends "
+            "(normal for PCR amplicons); commas separate exons")
+        self.horizontalHeaderItem(3).setToolTip("One qualifier per line, key: value "
+                                                "(gene, product, codon_start ...)")
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.setColumnWidth(0, 110)
@@ -98,6 +106,17 @@ class FeatureTable(QTableWidget):
         self.setColumnWidth(2, 220)
         self._loading = False
         self.cellChanged.connect(self._emit_edited)
+        self.set_editable(True)
+
+    def set_editable(self, editable: bool):
+        """项目加载态（无比对上下文）时禁编辑，避免改了也无法重验。"""
+        if editable:
+            self.setEditTriggers(
+                QAbstractItemView.EditTrigger.DoubleClicked
+                | QAbstractItemView.EditTrigger.SelectedClicked
+                | QAbstractItemView.EditTrigger.EditKeyPressed)
+        else:
+            self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
     def _emit_edited(self, _row, _col):
         if not self._loading:

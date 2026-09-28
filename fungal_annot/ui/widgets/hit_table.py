@@ -83,13 +83,13 @@ class HitTable(QTableWidget):
             self._radios.append(radio)
         if not self._radios:
             return
-        default_row = 0
         if chosen:
-            for i, acc in enumerate(self._accessions):
-                if acc == chosen:
-                    default_row = i
-                    break
-        self._radios[default_row].setChecked(True)   # 触发一次 on_select
+            # 已选 accession 在命中列表内 → 勾选该行（触发一次 on_select，值不变）；
+            # 不在列表内（弹窗手填的直接下载 accession）→ 不勾选、不覆盖已有选择
+            if chosen in self._accessions:
+                self._radios[self._accessions.index(chosen)].setChecked(True)
+            return
+        self._radios[0].setChecked(True)   # 无记录时默认推荐行
 
     def mark_recommended(self, row: int):
         """排序第一名：整行淡蓝底（§6.1）；悬停任意单元格可见推荐说明。"""

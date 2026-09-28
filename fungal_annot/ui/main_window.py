@@ -73,17 +73,17 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Fungal Multi-locus Feature Table Generator")
-        # 默认窗口大小：可用屏幕的 70%（夹在 900x600 与 1180x760 之间）；
+        # 默认窗口大小：可用屏幕的 60%（夹在 860x560 与 1060x700 之间）；
         # 用户手动调整后由 QSettings 记忆，此默认值仅首次启动生效
         self.setMinimumSize(860, 560)
         screen = QGuiApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
-            target = QSize(int(avail.width() * 0.7), int(avail.height() * 0.7))
-            target = target.boundedTo(QSize(1180, 760)).expandedTo(QSize(900, 600))
+            target = QSize(int(avail.width() * 0.6), int(avail.height() * 0.6))
+            target = target.boundedTo(QSize(1060, 700)).expandedTo(QSize(860, 560))
             self.resize(target)
         else:
-            self.resize(980, 640)
+            self.resize(920, 620)
 
         # ---- 状态 ----
         self.settings = load_settings()
@@ -150,15 +150,17 @@ class MainWindow(QMainWindow):
         self.update_summary()
 
         # ---- 记住窗口几何 ----
+        # 键名 geometry2：2026-09-28 默认尺寸调小后换键，旧几何不再恢复，
+        # 否则老用户永远看不到新默认值
         settings = QSettings("fungal_annot", "fungal_annot")
-        geom = settings.value("geometry")
+        geom = settings.value("geometry2")
         if geom is not None:
             self.restoreGeometry(geom)
         self._refresh_nav()          # 首屏即显示步骤标记
 
     def closeEvent(self, event):
         settings = QSettings("fungal_annot", "fungal_annot")
-        settings.setValue("geometry", self.saveGeometry())
+        settings.setValue("geometry2", self.saveGeometry())
         super().closeEvent(event)
 
     # ---- 页面导航 ----

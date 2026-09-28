@@ -15,7 +15,7 @@ from ..widgets.help import MARKER_HINT
 
 
 class PageExport(QWidget):
-    title = "4. Export"         # 步骤条标签：水平等宽排布下需要短标签
+    title = "4. Export Results"
 
     def __init__(self, win):
         super().__init__()

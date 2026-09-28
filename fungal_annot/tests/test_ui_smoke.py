@@ -23,12 +23,13 @@ def test_window_has_four_pages(window):
     assert window.stack.count() == 4
     assert not hasattr(window, "page_blast")
     titles = [window.nav.item(i).text() for i in range(window.nav.count())]
-    expect = ["1. Import & BLAST", "2. Reference", "3. Review", "4. Export"]
+    expect = ["1. Import & BLAST", "2. Select Reference", "3. Review Annotation",
+              "4. Export Results"]
     for got, exp in zip(titles, expect):     # 前缀是步骤标记（▶/✓/•），只比标题
         assert got.strip().endswith(exp), (got, exp)
     assert "▶" in titles[0] and "•" in titles[1]   # 初始：第 1 步当前、后续锁定
-    # 默认窗口大小夹取（≤1180x760，≥最小尺寸）
-    assert window.size().width() <= 1180 and window.size().height() <= 760
+    # 默认窗口大小夹取（≤1060x700，≥最小尺寸）
+    assert window.size().width() <= 1060 and window.size().height() <= 700
     assert window.minimumSize().width() == 860 and window.minimumSize().height() == 560
 
 
@@ -232,7 +233,7 @@ def test_annotate_and_review(window, ref_record_seq, ref_gb_text):
     assert [f.ftype for f in features] == ["gene", "CDS"]
     # P4 编辑重验：不加改动重验，状态应保持
     page.current = "u1"
-    page._revalidate()
+    page._auto_revalidate()
     assert window.results["u1"].status == res.status
 
 
@@ -258,7 +259,7 @@ def test_review_edit_revalidate_detects_error(window, ref_record_seq, ref_gb_tex
     row = next(r for r in range(page.feature_table.rowCount())
                if page.feature_table.item(r, 0).text() == "CDS")
     page.feature_table.item(row, 2).setText("1..300, 401..99999")
-    page._revalidate()
+    page._auto_revalidate()
     assert window.results["u2"].status == "red"
     assert any(i.code == "coord_out_of_range" for i in window.results["u2"].issues)
 
@@ -335,8 +336,8 @@ def test_alignment_viewer_uses_monospace(qtbot, window, ref_record_seq, ref_gb_t
 
 
 def test_reference_features_text(window, ref_record_seq, ref_gb_text):
-    """Phase 3：View reference features —— 展示参考自身的五列 feature table
-    （含 source 修饰符与参考原有 qualifier，如 protein_id）。"""
+    """View reference features —— 展示参考自身的五列 feature table
+    （不含 source；保留参考原有 qualifier，如 protein_id）。"""
     from fungal_annot.core.models import SeqInput
     from fungal_annot.services.pipeline import annotate_sequence
 
@@ -349,7 +350,7 @@ def test_reference_features_text(window, ref_record_seq, ref_gb_text):
     assert text is not None
     assert text.startswith(">Feature REF00001.1")
     assert "201\t600\tCDS" in text and "701\t1149\tCDS" in text      # 参考坐标原样
-    assert "\t\t\torganism\tFusarium referenceus" in text            # 合成 source 行（五列）
+    assert "\tsource" not in text and "organism" not in text         # source 信息已去掉
     assert "\t\t\tprotein_id\tNP_999.1" in text                      # 参考原有 qualifier 保留
     assert "codon_start" not in text                                 # 参考 CDS 完整，无该限定符
 
@@ -716,3 +717,148 @@ def test_issue_click_opens_glossary(window, qtbot, monkeypatch):
     item = page.issue_list.item(0)
     page._on_issue_clicked(item)
     assert shown == ["identity"]
+
+
+def test_accession_dialog_layout(window):
+    """View match 弹窗：序列名只读、第二列预填当前选择、values() 含全部行。"""
+    from PyQt6.QtCore import Qt
+
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.ui.pages.page_reference import AccessionDialog
+
+    window.add_sequence(SeqInput(seq_id="d1", seq="ACGT" * 10))
+    window.add_sequence(SeqInput(seq_id="d2", seq="ACGT" * 10))
+    dlg = AccessionDialog(window.sequences, {"d2": "MZ123456.1"}, window)
+    assert dlg.table.rowCount() == 2
+    assert dlg.table.item(0, 0).text() == "d1"
+    assert dlg.table.item(0, 1).text() == ""            # 无选择 → 空白
+    assert dlg.table.item(1, 1).text() == "MZ123456.1"  # 预填当前选择
+    assert not dlg.table.item(0, 0).flags() & Qt.ItemFlag.ItemIsEditable
+    dlg.table.item(0, 1).setText(" PP227174.1 ")
+    assert dlg.values() == {"d1": "PP227174.1", "d2": "MZ123456.1"}
+
+
+def test_enter_accessions_applies_values(window, monkeypatch):
+    """View match：非空行手动指定参考，清空行回落推荐命中；取消不应用。"""
+    from fungal_annot.core.blast_runner import BlastHit
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.ui.pages import page_reference as pr_mod
+
+    for sid in ("m1", "m2"):
+        window.add_sequence(SeqInput(seq_id=sid, seq="ACGT" * 60, gene_type="tef1"))
+        window.hits[sid] = [BlastHit(accession="AA000001", title="hit", pident=99.0,
+                                     qcovs=100.0, subject_len=60, flags={})]
+    page = window.page_reference
+    page.refresh()
+    assert window.selected_ref["m2"] == "AA000001"       # refresh 自动取推荐
+
+    class StubDialog:
+        def __init__(self, sequences, current, parent=None):
+            self.sequences, self.current = sequences, current
+        def exec(self):
+            return pr_mod.QDialog.DialogCode.Accepted
+        def values(self):
+            return {"m1": "MZ123456.1", "m2": ""}        # m2 清空 → 回落推荐
+    monkeypatch.setattr(pr_mod, "AccessionDialog", StubDialog)
+    page._enter_accessions()
+    assert window.selected_ref["m1"] == "MZ123456.1"     # 手填覆盖
+    assert window.selected_ref["m2"] == "AA000001"       # 清空 → 回落推荐
+
+    # 取消（Rejected）→ 不应用
+    class StubCancel(StubDialog):
+        def exec(self):
+            return pr_mod.QDialog.DialogCode.Rejected
+    monkeypatch.setattr(pr_mod, "AccessionDialog", StubCancel)
+    window.selected_ref["m1"] = "AA000001"
+    page._enter_accessions()
+    assert window.selected_ref["m1"] == "AA000001"
+
+
+def test_review_status_wording_and_confirm(window, ref_record_seq, ref_gb_text, monkeypatch):
+    """状态文案动作化：Confirm 随状态变化（红灯必选→已确认禁用），列表用新标记。"""
+    from PyQt6.QtWidgets import QInputDialog
+
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import annotate_sequence
+
+    seq, _ = ref_record_seq
+    window.add_sequence(SeqInput(seq_id="w1", seq=seq[300:1600], gene_type="tef1",
+                                 source_qualifiers={"organism": "F. t", "country": "China"}))
+    window.results["w1"] = annotate_sequence(window.sequences[0], window.make_config(),
+                                             reference_gb_text=ref_gb_text)
+    page = window.page_review
+    page.refresh()
+    page.current = "w1"
+    page.load_result("w1")
+    status = window.results["w1"].status
+    if status == "red":
+        assert "Needs review" in page.lbl_status.text()
+        assert page.b_confirm.text() == "Confirm for export (required)"
+        assert page.b_confirm.isEnabled()
+    elif status == "yellow":
+        assert "Ready" in page.lbl_status.text()
+        assert page.b_confirm.text() == "Confirm for export (optional)"
+    else:
+        assert page.lbl_status.text() == "w1: Ready"
+        assert not page.b_confirm.isEnabled()
+
+    # 确认（黄/红）→ 按钮变为已确认并禁用；绿灯本就无需确认
+    if status != "green":
+        monkeypatch.setattr(QInputDialog, "getText",
+                            staticmethod(lambda *a, **k: ("known issue", True)))
+        page._manual_confirm()
+        assert window.confirmed["w1"] is True
+        assert page.b_confirm.text().startswith("Confirmed")
+        assert not page.b_confirm.isEnabled()
+        assert "manually confirmed" in page.lbl_status.text()
+
+    # 列表标记用新文案
+    item_text = page.seq_list.item(0).text()
+    assert any(m in item_text for m in ("✓ Ready", "⚠ Warnings", "✗ Needs review"))
+    # 图例链接与 Re-check all 就位
+    assert "What do the colors mean?" in page.lbl_legend.text()
+    page._recheck_all()
+    assert "Re-checked" in window.statusBar().currentMessage()
+
+
+def test_review_issues_hidden_when_clean(window, ref_record_seq, ref_gb_text, monkeypatch):
+    """全绿时 Issues 区隐藏（不再撑一个大空框）；红灯时显示且点击跳转 feature 行。"""
+    from PyQt6.QtWidgets import QInputDialog
+
+    from fungal_annot.core.models import Issue, SeqInput
+    from fungal_annot.services.pipeline import SeqResult, Provenance, annotate_sequence
+
+    seq, _ = ref_record_seq
+    window.add_sequence(SeqInput(seq_id="g1", seq=seq[300:1600], gene_type="tef1",
+                                 source_qualifiers={"organism": "F. t", "country": "China"}))
+    res = annotate_sequence(window.sequences[0], window.make_config(),
+                            reference_gb_text=ref_gb_text)
+    monkeypatch.setattr(QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: ("", True)))
+    if res.status != "green":
+        window.confirmed["g1"] = True
+    window.results["g1"] = res
+    page = window.page_review
+    page.refresh()
+    page.current = "g1"
+    page.load_result("g1")
+
+    # 构造红灯：加一条 error issue → Issues 区可见
+    res.issues = [Issue("error", "cds_phase", "CDS is not marked partial at the 3' end")]
+    res.status = "red"
+    page.load_result("g1")
+    assert page.lbl_issues.isVisibleTo(page) and page.issue_list.isVisibleTo(page)
+    assert any("Error:" in page.issue_list.item(i).text()
+               for i in range(page.issue_list.count()))
+    # 点击 issue → 跳到 CDS 行
+    page._on_issue_clicked(page.issue_list.item(0))
+    selected = {i.row() for i in page.feature_table.selectedIndexes()}
+    types = {page.feature_table.item(r, 0).text() for r in selected}
+    assert "CDS" in types
+
+    # 回到全绿 → Issues 区隐藏
+    res.issues = []
+    res.status = "green"
+    page.load_result("g1")
+    assert not page.lbl_issues.isVisibleTo(page)
+    assert not page.issue_list.isVisibleTo(page)

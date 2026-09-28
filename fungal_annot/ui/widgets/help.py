@@ -10,6 +10,19 @@ MARKER_HINT = ("Marker gene preset (tef1, act, LSU...) chosen automatically from
                "until then.")
 
 HELP = {
+    "status_colors": (
+        "Traffic-light status",
+        "<p>Every sequence gets one of three statuses after annotation - and again "
+        "after every edit:</p>"
+        "<ul>"
+        "<li><b style='color:#1a7f37'>✓ Ready</b> — no problems found. Nothing to do.</li>"
+        "<li><b style='color:#9a6700'>⚠ Warnings</b> — the table can be exported, but "
+        "read the warnings first (they are often expected for partial amplicons). "
+        "Confirming is optional.</li>"
+        "<li><b style='color:#cf222e'>✗ Needs review</b> — an error was detected. Fix it "
+        "in the feature table, or press <b>Confirm for export</b> to accept it "
+        "knowingly; export stays blocked until then.</li>"
+        "</ul>"),
     "partial": (
         "Partial feature",
         "<p>A <b>partial feature</b> is one whose ends do not reach a natural gene boundary. "

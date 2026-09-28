@@ -1,24 +1,27 @@
-"""P4 注释审核页（§7.2，核心交互页）：状态灯、计数条、可编辑 feature 表格（支持
-增删行）、结构化验证报告（带修复提示，点击可展开术语卡）、比对视图、红灯人工确认。
-编辑后 600ms 防抖自动重验；无比对上下文（项目加载态）退回手动 Re-validate。"""
+"""P4 注释审核页（§7.2，核心交互页）：状态用动作化文案表达（Ready / Ready · review
+warnings / Needs review），计数条附图例链接与 Re-check all；feature 表格支持增删行、
+编辑后 600ms 防抖自动重验（无比对上下文的项目加载态禁编辑并给行内提示）；Issues 列表
+带修复建议，点击展开术语卡并跳转相关 feature 行；红灯序列需 Confirm 后才能导出。"""
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QTextCursor
-from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QListWidget,
+from PyQt6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QListWidget,
                              QListWidgetItem, QMessageBox, QPlainTextEdit,
                              QPushButton, QVBoxLayout, QWidget)
 
 from ...core.tbl_writer import write_tbl
 from ...core.validator import status_of, validate
-from ..icons import icon
 from ..widgets.feature_table import FeatureTable
-from ..widgets.help import HelpButton, show_help
+from ..widgets.help import show_help
 
 _STATUS_COLOR = {"green": "#1a7f37", "yellow": "#9a6700", "red": "#cf222e"}
-_STATUS_LABEL = {"green": "Green - pass", "yellow": "Yellow - warnings (may submit)",
-                 "red": "Red - manual confirmation required"}
-_SEVERITY = {"error": ("⛔  ", QColor("#cf222e")),
-             "warning": ("⚠  ", QColor("#9a6700")),
-             "info": ("ℹ  ", QColor("#57606a"))}
+# 动作导向文案：告诉用户"该做什么"而不只是颜色名
+_STATUS_LABEL = {"green": "Ready",
+                 "yellow": "Ready - review the warnings below",
+                 "red": "Needs review - fix it or confirm before export"}
+_STATUS_MARK = {"green": "✓ Ready", "yellow": "⚠ Warnings", "red": "✗ Needs review"}
+_SEVERITY = {"error": ("⛔ ", QColor("#cf222e")),
+             "warning": ("⚠ ", QColor("#9a6700")),
+             "info": ("ℹ ", QColor("#57606a"))}
 
 # 已知问题 → 一句建议动作（§11：验证报告用自然语言解释）
 HINTS = {
@@ -49,12 +52,21 @@ HINTS = {
                         "or from a distant species.",
 }
 
-
 # issue code → 术语卡词条：点击该条 issue 直接展开解释
 _ISSUE_HELP = {
     "internal_stop": "transl_table",
     "transl_table_conflict": "transl_table",
     "low_identity": "identity",
+}
+
+# issue code → 受影响的 feature 类型：点击 issue 跳转到表格中对应行
+_ISSUE_ROW_TYPE = {
+    "internal_stop": "CDS", "no_start_codon": "CDS", "no_stop_codon": "CDS",
+    "cds_phase": "CDS", "protein_identity": "CDS", "transl_table_conflict": "CDS",
+    "n_boundary": "CDS", "low_identity": "CDS",
+    "modifier_missing": "source", "modifier_format": "source",
+    "country_unverified": "source",
+    "seqid_invalid": "gene",
 }
 
 
@@ -127,7 +139,7 @@ class AlignmentDialog(QDialog):
 
 
 class PageReview(QWidget):
-    title = "3. Review"         # 步骤条标签：水平等宽排布下需要短标签
+    title = "3. Review Annotation"
 
     def __init__(self, win):
         super().__init__()
@@ -137,33 +149,36 @@ class PageReview(QWidget):
         outer.setContentsMargins(16, 16, 16, 16)
         outer.setSpacing(10)
 
-        # ---- 顶部计数条 + 跳转（Phase 3）----
+        # ---- 顶部计数条：总览 + 图例 + 全量重查 ----
         ribbon = QHBoxLayout()
         self.lbl_ribbon = QLabel("")
         self.lbl_ribbon.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_legend = QLabel('<a href="#legend">What do the colors mean?</a>')
+        self.lbl_legend.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_legend.setToolTip("Explains Ready / Warnings / Needs review")
+        self.lbl_legend.linkActivated.connect(lambda _: show_help("status_colors", self))
+        self.b_recheck = QPushButton("Re-check all")
+        self.b_recheck.setToolTip("Re-run validation on every annotated sequence with the "
+                                  "current settings (e.g. after changing the identity "
+                                  "threshold)")
+        self.b_recheck.clicked.connect(self._recheck_all)
         self.b_next_issue = QPushButton("Next issue →")
         self.b_next_issue.setToolTip("Jump to the next sequence with warnings or errors")
         self.b_next_issue.clicked.connect(self._jump_next_issue)
         ribbon.addWidget(self.lbl_ribbon)
         ribbon.addStretch(1)
+        ribbon.addWidget(self.lbl_legend)
+        ribbon.addWidget(self.b_recheck)
         ribbon.addWidget(self.b_next_issue)
         outer.addLayout(ribbon)
 
         body = QHBoxLayout()
         left = QVBoxLayout()
-        left.addWidget(QLabel("Sequences (status)"))
+        left.addWidget(QLabel("Sequences"))
         self.seq_list = QListWidget()
         self.seq_list.setMaximumWidth(300)   # 名单列不挤占 feature 表格
         self.seq_list.currentRowChanged.connect(self._on_seq_selected)
         left.addWidget(self.seq_list, 1)
-        self.lbl_status = QLabel("-")
-        self.lbl_status.setWordWrap(True)
-        left.addWidget(self.lbl_status)
-        b_confirm = QPushButton("Manual confirm for export")
-        b_confirm.setToolTip("RED sequences must be confirmed here (with an optional "
-                             "note) before they can be exported")
-        b_confirm.clicked.connect(self._manual_confirm)
-        left.addWidget(b_confirm)
         body.addLayout(left, 1)
 
         right = QVBoxLayout()
@@ -171,42 +186,63 @@ class PageReview(QWidget):
         self.feature_table.edited.connect(self._on_edited)
         right.addWidget(self.feature_table, 2)
 
-        btns = QHBoxLayout()
-        b_reval = QPushButton(icon("fa5s.sync-alt"), "Re-validate")
-        b_reval.clicked.connect(self._revalidate)
-        b_add_feat = QPushButton(icon("fa5s.plus"), "Add feature")
-        b_add_feat.setToolTip("Insert a new CDS row spanning the whole sequence, "
-                              "then edit the cells (type, coordinates, qualifiers)")
-        b_add_feat.clicked.connect(self._add_feature)
-        b_del_feat = QPushButton(icon("fa5s.trash-alt"), "Delete row")
-        b_del_feat.setToolTip("Delete the selected feature row(s) "
-                              "(the source row cannot be deleted)")
-        b_del_feat.clicked.connect(self._delete_feature)
-        btns.addWidget(b_reval)
-        btns.addWidget(b_add_feat)
-        btns.addWidget(b_del_feat)
-        btns.addStretch(1)
-        right.addLayout(btns)
-
-        btns2 = QHBoxLayout()
+        # ---- 单条工具栏：编辑类与查看类用分隔线分组 ----
+        toolbar = QHBoxLayout()
+        self.b_add_feat = QPushButton("Add feature")
+        self.b_add_feat.setToolTip("Insert a new CDS row spanning the whole sequence, "
+                                   "then edit the cells (type, coordinates, qualifiers)")
+        self.b_add_feat.clicked.connect(self._add_feature)
+        self.b_del_feat = QPushButton("Delete row")
+        self.b_del_feat.setToolTip("Delete the selected feature row(s) "
+                                   "(the source row cannot be deleted)")
+        self.b_del_feat.clicked.connect(self._delete_feature)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
         b_align = QPushButton("View alignment")
+        b_align.setToolTip("Reference vs query alignment, with match marks and coordinates")
         b_align.clicked.connect(self._show_alignment)
-        b_ref_feat = QPushButton(icon("fa5s.table"), "View reference features")
-        b_ref_feat.setToolTip("Show the reference record's own five-column feature table")
-        b_ref_feat.clicked.connect(self._show_reference_features)
-        btns2.addWidget(b_align)
-        btns2.addWidget(b_ref_feat)
-        btns2.addStretch(1)
-        btns2.addWidget(HelpButton("partial"))
-        btns2.addWidget(HelpButton("codon_start"))
-        right.addLayout(btns2)
+        self.b_ref_feat = QPushButton("View reference features")
+        self.b_ref_feat.setToolTip("Show the reference record's own five-column feature table")
+        self.b_ref_feat.clicked.connect(self._show_reference_features)
+        toolbar.addWidget(self.b_add_feat)
+        toolbar.addWidget(self.b_del_feat)
+        toolbar.addWidget(sep)
+        toolbar.addWidget(b_align)
+        toolbar.addWidget(self.b_ref_feat)
+        toolbar.addStretch(1)
+        right.addLayout(toolbar)
 
-        right.addWidget(QLabel("Validation report"))
+        self.lbl_issues = QLabel("Issues")
+        right.addWidget(self.lbl_issues)
         self.issue_list = QListWidget()
         self.issue_list.itemClicked.connect(self._on_issue_clicked)
         right.addWidget(self.issue_list, 1)
         body.addLayout(right, 3)
         outer.addLayout(body, 1)
+
+        # 项目加载态提示（无比对上下文 → 禁编辑，替代原 Re-validate 弹窗）
+        self.lbl_project_hint = QLabel(
+            "Loaded from a project file - editing is disabled because the alignment "
+            "context is not stored in the project. Re-annotate in step 2 to restore it.")
+        self.lbl_project_hint.setObjectName("Hint")
+        self.lbl_project_hint.setWordWrap(True)
+        self.lbl_project_hint.setVisible(False)
+        outer.addWidget(self.lbl_project_hint)
+
+        # ---- 底部状态条：状态文案 + 上下文动作（Confirm 随状态可用）----
+        strip = QHBoxLayout()
+        self.lbl_status = QLabel("-")
+        self.lbl_status.setWordWrap(True)
+        strip.addWidget(self.lbl_status, 1)
+        self.b_confirm = QPushButton("Confirm for export")
+        self.b_confirm.setToolTip("Record that you reviewed this sequence knowingly "
+                                  "(optional note kept in the log). Required for red "
+                                  "sequences before export.")
+        self.b_confirm.clicked.connect(self._manual_confirm)
+        self.b_confirm.setEnabled(False)
+        strip.addWidget(self.b_confirm)
+        outer.addLayout(strip)
 
         # ---- 编辑后防抖自动重验 ----
         self._reval_timer = QTimer(self)
@@ -223,9 +259,9 @@ class PageReview(QWidget):
         self.lbl_ribbon.setText(
             f'<span style="color:#24292f">{n} sequences</span> · '
             f'<span style="color:#57606a">{done} annotated</span> &nbsp;&nbsp; '
-            f'<span style="color:#1a7f37">● {g} pass</span> &nbsp; '
-            f'<span style="color:#9a6700">● {y} warn</span> &nbsp; '
-            f'<span style="color:#cf222e">● {e} error</span>')
+            f'<span style="color:#1a7f37">✓ {g} ready</span> &nbsp; '
+            f'<span style="color:#9a6700">⚠ {y} warnings</span> &nbsp; '
+            f'<span style="color:#cf222e">✗ {e} need review</span>')
 
     def _jump_next_issue(self):
         """循环跳到下一条有 warning/error 的序列。"""
@@ -247,8 +283,7 @@ class PageReview(QWidget):
         for s in self.win.sequences:
             res = self.win.results.get(s.seq_id)
             state = res.status if res else "pending"
-            mark = {"green": "● pass", "yellow": "● warn",
-                    "red": "● RED"}.get(state, "○ not annotated")
+            mark = _STATUS_MARK.get(state, "○ not annotated")
             item = QListWidgetItem(f"{mark}  {s.seq_id}")
             item.setData(Qt.ItemDataRole.UserRole, s.seq_id)
             item.setForeground(QColor(_STATUS_COLOR.get(state, "#8b949e")))
@@ -259,11 +294,10 @@ class PageReview(QWidget):
             self.seq_list.setCurrentRow(row)
 
     def _refresh_seq_row(self, seq_id: str):
-        """只刷新清单中该序列的状态点（自动重验时避免整表重建打断编辑）。"""
+        """只刷新清单中该序列的状态行（自动重验时避免整表重建打断编辑）。"""
         res = self.win.results.get(seq_id)
         state = res.status if res else "pending"
-        mark = {"green": "● pass", "yellow": "● warn",
-                "red": "● RED"}.get(state, "○ not annotated")
+        mark = _STATUS_MARK.get(state, "○ not annotated")
         for row in range(self.seq_list.count()):
             item = self.seq_list.item(row)
             if item.data(Qt.ItemDataRole.UserRole) == seq_id:
@@ -282,26 +316,38 @@ class PageReview(QWidget):
         res = self.win.results.get(seq_id)
         if res is None:
             self.feature_table.setRowCount(0)
+            self.feature_table.set_editable(False)
+            self.b_add_feat.setEnabled(False)
+            self.b_del_feat.setEnabled(False)
+            self.lbl_project_hint.setVisible(False)
+            self.lbl_issues.setVisible(False)
+            self.issue_list.setVisible(False)
             self.issue_list.clear()
-            self.issue_list.addItem(QListWidgetItem("Not annotated (go back and run annotation)"))
             self.lbl_status.setText("not annotated")
+            self.b_confirm.setEnabled(False)
+            self.b_confirm.setText("Confirm for export")
             return
+        # 无比对上下文（项目加载态）→ 禁编辑并给出常驻提示
+        editable = res.detail is not None
+        self.feature_table.set_editable(editable)
+        self.b_add_feat.setEnabled(editable)
+        self.b_del_feat.setEnabled(editable)
+        self.lbl_project_hint.setVisible(not editable)
         self.feature_table.build_from_features(res.features)
         self._load_issues(seq_id)
 
     def _load_issues(self, seq_id: str):
-        """只刷新 issue 列表与状态条（不触碰 feature 表格，保留编辑焦点）。"""
+        """刷新 Issues 区与底部状态条（不触碰 feature 表格，保留编辑焦点）。"""
         res = self.win.results.get(seq_id)
         if res is None:
             return
+        has_issues = bool(res.issues)
+        self.lbl_issues.setVisible(has_issues)
+        self.issue_list.setVisible(has_issues)
         self.issue_list.clear()
-        if not res.issues:
-            ok = QListWidgetItem("✓  All checks passed")
-            ok.setForeground(QColor("#1a7f37"))
-            self.issue_list.addItem(ok)
         for i in res.issues:
-            mark, color = _SEVERITY.get(i.level, ("·  ", QColor("#57606a")))
-            text = f"{mark}[{i.level}] {i.message}"
+            mark, color = _SEVERITY.get(i.level, ("· ", QColor("#57606a")))
+            text = f"{mark}{i.level.capitalize()}: {i.message}"
             hint = HINTS.get(i.code)
             if hint:
                 text += f"\n      → {hint}"
@@ -310,41 +356,30 @@ class PageReview(QWidget):
             term = _ISSUE_HELP.get(i.code)
             if term:
                 item.setData(Qt.ItemDataRole.UserRole, term)
-                item.setToolTip("Click for a glossary card")
+            item.setData(Qt.ItemDataRole.UserRole + 1, i.code)
+            if term or i.code in _ISSUE_ROW_TYPE:
+                item.setToolTip("Click to jump to the related feature row"
+                                + (" and open the glossary card" if term else ""))
             self.issue_list.addItem(item)
-        self.lbl_status.setText(f"{seq_id}: {_STATUS_LABEL.get(res.status, res.status)}"
-                                + (" (manually confirmed)" if self.win.confirmed.get(seq_id) else ""))
+        # 底部状态条：状态文案 + Confirm 按钮随状态变化（红灯必选、黄灯可选、绿灯禁用）
+        self.lbl_status.setText(
+            f"{seq_id}: {_STATUS_LABEL.get(res.status, res.status)}"
+            + ("  (manually confirmed)" if self.win.confirmed.get(seq_id) else ""))
+        if res.status == "red":
+            confirmed = self.win.confirmed.get(seq_id)
+            self.b_confirm.setEnabled(not confirmed)
+            self.b_confirm.setText("Confirmed ✓" if confirmed
+                                   else "Confirm for export (required)")
+        elif res.status == "yellow":
+            confirmed = self.win.confirmed.get(seq_id)
+            self.b_confirm.setEnabled(not confirmed)
+            self.b_confirm.setText("Confirmed ✓" if confirmed
+                                   else "Confirm for export (optional)")
+        else:
+            self.b_confirm.setEnabled(False)
+            self.b_confirm.setText("Confirm for export")
 
     # ---- 编辑重验 ----
-    def _revalidate(self):
-        sid = self.current
-        res = self.win.results.get(sid)
-        if res is None or res.detail is None:
-            QMessageBox.warning(self, "Cannot re-validate",
-                                "The current result lacks alignment context (loaded from a "
-                                "project file). Re-annotate in step 2 first.")
-            return
-        s = next((x for x in self.win.sequences if x.seq_id == sid), None)
-        if s is None:
-            return
-        try:
-            features = self.feature_table.to_features()
-        except ValueError as ex:
-            QMessageBox.warning(self, "Invalid input", str(ex))
-            return
-        detail = res.detail
-        issues = validate(s, features, detail.mapping, detail.ref_features,
-                          detail.ref_seq, detail.preset, self.win.make_config())
-        res.features = features
-        res.issues = issues
-        res.status = status_of(issues)
-        res.tbl_text = write_tbl(features, sid)
-        self.load_result(sid)
-        self.refresh()
-        self.win.log(f"[{sid}] Re-validated after edit: status {res.status}, "
-                     f"{len(issues)} issue(s)")
-
-    # ---- 编辑后自动重验（防抖 600ms，不重建表格以保留编辑焦点）----
     def _on_edited(self):
         res = self.win.results.get(self.current) if self.current else None
         if res is None:
@@ -355,7 +390,7 @@ class PageReview(QWidget):
         sid = self.current
         res = self.win.results.get(sid)
         if res is None or res.detail is None:
-            return      # 项目加载态无比对上下文：静默跳过（手动按钮会给出解释）
+            return      # 项目加载态无比对上下文：静默跳过（行内提示已说明）
         s = next((x for x in self.win.sequences if x.seq_id == sid), None)
         if s is None:
             return
@@ -374,8 +409,25 @@ class PageReview(QWidget):
         self._load_issues(sid)
         self._refresh_seq_row(sid)
         self._update_ribbon()
+        self.lbl_status.setText(self.lbl_status.text() + "   ·   re-checked just now")
         self.win.log(f"[{sid}] Auto re-validated: status {res.status}, "
                      f"{len(issues)} issue(s)")
+
+    def _recheck_all(self):
+        """用当前设置重查全部已注释序列（如改了 identity threshold 之后）。"""
+        n = 0
+        for s in self.win.sequences:
+            res = self.win.results.get(s.seq_id)
+            if res is None or res.detail is None:
+                continue
+            issues = validate(s, res.features, res.detail.mapping, res.detail.ref_features,
+                              res.detail.ref_seq, res.detail.preset, self.win.make_config())
+            res.issues = issues
+            res.status = status_of(issues)
+            res.tbl_text = write_tbl(res.features, s.seq_id)
+            n += 1
+        self.refresh()
+        self.win.log(f"Re-checked {n} sequence(s) with current settings")
 
     # ---- feature 行增删 ----
     def _add_feature(self):
@@ -399,12 +451,22 @@ class PageReview(QWidget):
             return
         self._on_edited()
 
-    # ---- issue 点击 → 术语卡 ----
+    # ---- issue 点击 → 术语卡 + 行跳转 ----
     def _on_issue_clicked(self, item):
         term = item.data(Qt.ItemDataRole.UserRole)
         if term:
             show_help(term, self)
+        ftype = _ISSUE_ROW_TYPE.get(item.data(Qt.ItemDataRole.UserRole + 1))
+        if not ftype:
+            return
+        for row in range(self.feature_table.rowCount()):
+            titem = self.feature_table.item(row, 0)
+            if titem is not None and titem.text().strip() == ftype:
+                self.feature_table.selectRow(row)
+                self.feature_table.scrollToItem(titem)
+                break
 
+    # ---- 人工确认（红灯必须，黄灯可选）----
     def _manual_confirm(self):
         sid = self.current
         if not sid:
@@ -412,9 +474,9 @@ class PageReview(QWidget):
         res = self.win.results.get(sid)
         if res is None:
             return
-        if res.status != "red" and not res.issues:
+        if res.status == "green":
             QMessageBox.information(self, "No confirmation needed",
-                                    "This sequence is green; no confirmation needed.")
+                                    "This sequence is Ready; no confirmation needed.")
             return
         note, ok = self._ask_note(sid)
         if not ok:
@@ -432,17 +494,12 @@ class PageReview(QWidget):
         return (text.strip(), ok)
 
     def _reference_features_text(self):
-        """参考记录自身的五列 feature table（含原 qualifier，只读对照用）。"""
+        """参考记录自身的五列 feature table（不含 source，只读对照用）。"""
         res = self.win.results.get(self.current) if self.current else None
         if res is None or res.detail is None:
             return None
         d = res.detail
-        features = list(d.ref_features)
-        if d.ref_len:
-            from ...core.models import Feature as _F, FeaturePart as _P
-            src_f = _F(ftype="source", strand=1,
-                       parts=[_P(1, d.ref_len)], qualifiers=d.ref_source_quals)
-            features = [src_f] + features
+        features = [f for f in d.ref_features if f.ftype != "source"]
         acc = res.provenance.reference or "reference"
         return write_tbl(features, acc)
 
