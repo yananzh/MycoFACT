@@ -11,14 +11,9 @@ from PyQt6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QListWidget,
 from ...core.tbl_writer import write_tbl
 from ...core.validator import status_of, validate
 from ..widgets.feature_table import FeatureTable
-from ..widgets.help import show_help
-
-_STATUS_COLOR = {"green": "#1a7f37", "yellow": "#9a6700", "red": "#cf222e"}
-# 动作导向文案：告诉用户"该做什么"而不只是颜色名
-_STATUS_LABEL = {"green": "Ready",
-                 "yellow": "Ready - review the warnings below",
-                 "red": "Needs review - fix it or confirm before export"}
-_STATUS_MARK = {"green": "✓ Ready", "yellow": "⚠ Warnings", "red": "✗ Needs review"}
+from ..widgets.help import (STATUS_COLOR as _STATUS_COLOR,
+                            STATUS_HINT as _STATUS_LABEL,
+                            STATUS_MARK as _STATUS_MARK, show_help)
 _SEVERITY = {"error": ("⛔ ", QColor("#cf222e")),
              "warning": ("⚠ ", QColor("#9a6700")),
              "info": ("ℹ ", QColor("#57606a"))}

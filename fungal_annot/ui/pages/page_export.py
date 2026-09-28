@@ -4,14 +4,15 @@ BankIt 门户模式：.tbl 只含 gene/CDS 等 feature（source 由门户表单�
 因此 table2asn 预检不再适用，已随自包含模式一并移除。
 """
 from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                              QMessageBox, QPushButton, QTableWidget,
                              QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...services.pipeline import write_outputs
-from ..icons import icon
-from ..widgets.help import MARKER_HINT
+from ..widgets.help import MARKER_HINT, STATUS_COLOR, STATUS_MARK
+
+_N_COLS = 8
 
 
 class PageExport(QWidget):
@@ -24,13 +25,14 @@ class PageExport(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, _N_COLS)
         self.table.setHorizontalHeaderLabels(
             ["Seq ID", "Marker", "Status", "Features", "Reference", "Region",
              "Orientation", "Confirmed"])
         self.table.horizontalHeader().setDefaultAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.table.horizontalHeaderItem(1).setToolTip(MARKER_HINT)
+        self.table.horizontalHeader().setStretchLastSection(True)   # 表格铺满行宽
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self.table, 1)
 
@@ -45,25 +47,21 @@ class PageExport(QWidget):
         layout.addLayout(dir_layout)
 
         btns = QHBoxLayout()
-        b_refresh = QPushButton("Refresh summary")
-        b_refresh.clicked.connect(self.refresh)
-        b_export = QPushButton(icon("fa5s.file-export", "#ffffff"),
-                               "Export all (.tbl + .fsa + report)")
-        b_export.setObjectName("PrimaryButton")
-        b_export.clicked.connect(self._export)
-        self.b_open_folder = QPushButton(icon("fa5s.folder-open"), "Open output folder")
-        self.b_open_folder.clicked.connect(self._open_folder)
-        btns.addWidget(b_refresh)
-        btns.addWidget(b_export)
-        btns.addWidget(self.b_open_folder)
+        self.b_export = QPushButton("Export all (.tbl + .fsa + report)")
+        self.b_export.setObjectName("PrimaryButton")
+        self.b_export.clicked.connect(self._export)
+        b_open = QPushButton("Open output folder")
+        b_open.clicked.connect(self._open_folder)
+        btns.addWidget(self.b_export)
+        btns.addWidget(b_open)
         btns.addStretch(1)
         layout.addLayout(btns)
 
         self.lbl_hint = QLabel(
-            "Red sequences without manual confirmation are blocked from export. "
-            "The .tbl contains gene/CDS features only - organism and source modifiers are "
-            "entered in the BankIt portal (GB2sequin-style workflow). Results were "
-            "validated at annotation time and after every edit.")
+            "Sequences marked 'Needs review' are blocked from export until confirmed on "
+            "the Review page. The .tbl contains gene/CDS features only - organism and "
+            "source modifiers are entered in the BankIt portal (GB2sequin-style "
+            "workflow). Results were validated at annotation time and after every edit.")
         self.lbl_hint.setWordWrap(True)
         layout.addWidget(self.lbl_hint)
 
@@ -73,22 +71,53 @@ class PageExport(QWidget):
             self.dir_edit.setText(d)
 
     def refresh(self):
+        self.table.clearSpans()
         self.table.setRowCount(0)
+        if not self.win.sequences:
+            # 空状态：一行跨全表的引导，替代只有表头的空白
+            self.table.setRowCount(1)
+            self.table.setSpan(0, 0, 1, _N_COLS)
+            hint = QTableWidgetItem(
+                "Nothing here yet - import and annotate sequences in steps 1-3, "
+                "then the export summary fills in")
+            hint.setFlags(hint.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            hint.setForeground(QColor("#8b949e"))
+            self.table.setItem(0, 0, hint)
         for s in self.win.sequences:
             res = self.win.results.get(s.seq_id)
             row = self.table.rowCount()
             self.table.insertRow(row)
             if res is None:
-                for col, text in enumerate([s.seq_id, s.gene_type or "auto-detect",
-                                            "not annotated", "-", "-", "-", "-", "-"]):
+                values = [s.seq_id, s.gene_type or "auto-detect", "○ not annotated",
+                          "-", "-", "-", "-", "-"]
+                for col, text in enumerate(values):
                     self.table.setItem(row, col, QTableWidgetItem(text))
                 continue
             p = res.provenance
-            confirmed = "Yes" if self.win.confirmed.get(s.seq_id) else "No"
-            values = [s.seq_id, s.gene_type, res.status, str(len(res.features)),
-                      p.reference or "-", p.region or "-", p.orientation, confirmed]
-            for col, text in enumerate(values):
+            status_item = QTableWidgetItem(
+                STATUS_MARK.get(res.status, res.status))
+            status_item.setForeground(
+                QColor(STATUS_COLOR.get(res.status, "#24292f")))
+            confirmed = bool(self.win.confirmed.get(s.seq_id))
+            conf_item = QTableWidgetItem("Yes" if confirmed else "No")
+            # 只有"红灯未确认"的 No 是阻断性的，标红；其余中性灰
+            conf_item.setForeground(
+                QColor(STATUS_COLOR["red"])
+                if res.status == "red" and not confirmed else QColor("#57606a"))
+            # Seq ID / Marker / Features / Reference / Region / Orientation 按列布局，
+            # Status(2) 与 Confirmed(7) 两列带颜色单独填
+            plain = [s.seq_id, s.gene_type, str(len(res.features)),
+                     p.reference or "-", p.region or "-", p.orientation]
+            for col, text in zip((0, 1, 3, 4, 5, 6), plain):
                 self.table.setItem(row, col, QTableWidgetItem(text))
+            self.table.setItem(row, 2, status_item)
+            self.table.setItem(row, 7, conf_item)
+        # 无结果时禁用导出（点击才弹提示没有意义）
+        has_results = bool(self.win.results)
+        self.b_export.setEnabled(has_results)
+        self.b_export.setToolTip("" if has_results else
+                                 "Nothing to export yet - annotate sequences in "
+                                 "steps 1-3 first")
 
     def _export(self):
         blocked = [sid for sid, res in self.win.results.items()
@@ -98,7 +127,7 @@ class PageExport(QWidget):
                 self, "Export blocked",
                 "These RED sequences lack manual confirmation and cannot be exported:\n"
                 + "\n".join(blocked)
-                + "\n\nUse the 'Manual confirm' button on the Review page.")
+                + "\n\nUse the 'Confirm for export' button on the Review page.")
             return
         if not self.win.results:
             QMessageBox.information(self, "No results", "Nothing to export yet.")
@@ -121,3 +150,6 @@ class PageExport(QWidget):
         out = self.dir_edit.text().strip()
         if out and os.path.isdir(out):
             QDesktopServices.openUrl(QUrl.fromLocalFile(out))
+        else:
+            QMessageBox.information(self, "Folder not found",
+                                    f"The directory does not exist yet:\n{out or '(empty)'}")

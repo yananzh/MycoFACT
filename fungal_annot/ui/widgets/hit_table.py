@@ -21,6 +21,16 @@ def _fmt_title(title: str, limit: int = 64) -> str:
     return t if len(t) <= limit else t[:limit - 1] + "…"
 
 
+def _title_tooltip(title: str, width: int = 78, max_chars: int = 800) -> str:
+    """标题 tooltip：GenBank 定义行可能极长（基因组记录可达数百字符），单行
+    tooltip 会横跨屏幕，按宽度折行后才是可读的多行块；过长部分截断。"""
+    import textwrap
+    t = _GI_PREFIX.sub("", title).strip()
+    if len(t) > max_chars:
+        t = t[:max_chars].rstrip() + "…"
+    return "\n".join(textwrap.wrap(t, width=width)) or t
+
+
 class HitTable(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(0, 6, parent)
@@ -53,14 +63,17 @@ class HitTable(QTableWidget):
             self.insertRow(row)
             self._accessions.append(h.accession)
             ratio = (h.subject_len / query_len) if query_len and h.subject_len else 0.0
+            display_title = _fmt_title(h.title)
+            title_item = QTableWidgetItem(display_title)
+            if _GI_PREFIX.sub("", h.title).strip() != display_title:
+                title_item.setToolTip(_title_tooltip(h.title))   # 仅在显示被截断时给全文
             items = [
                 QTableWidgetItem(h.accession),
-                QTableWidgetItem(_fmt_title(h.title)),
+                title_item,
                 QTableWidgetItem(f"{h.pident:.2f}"),
                 QTableWidgetItem(f"{h.qcovs:.1f}"),
                 QTableWidgetItem(f"{ratio:.2f}"),
             ]
-            items[1].setToolTip(h.title)    # 标题列宽有限，悬停看全文
             for col, item in enumerate(items):
                 self.setItem(row, col, item)
             # 长度比着色：1.0–1.5 绿（推荐区间），>2 黄（基因组级）
@@ -92,15 +105,20 @@ class HitTable(QTableWidget):
         self._radios[0].setChecked(True)   # 无记录时默认推荐行
 
     def mark_recommended(self, row: int):
-        """排序第一名：整行淡蓝底（§6.1）；悬停任意单元格可见推荐说明。"""
+        """排序第一名：整行淡蓝底（§6.1）。推荐说明并入既有 tooltip——不能覆盖
+        Title 列的全文与 Ratio 列的窗口截取说明；重复调用不叠加。"""
         if row < 0 or row >= self.rowCount():
             return
         tip = "Recommended - top-ranked hit by identity, coverage and length"
-        for col in range(self.columnCount()):    # 选择列的单选框不涂底色，但提示保留
+        for col in range(self.columnCount()):
             item = self.item(row, col)
-            if item is not None:
-                item.setBackground(QColor("#eaf2fc"))
-                item.setToolTip(tip)
+            if item is None:
+                continue
+            item.setBackground(QColor("#eaf2fc"))
+            existing = item.toolTip()
+            if tip in existing:
+                continue
+            item.setToolTip(f"{tip}\n\n{existing}" if existing else tip)
 
     def current_accession(self) -> str | None:
         row = self.currentRow()

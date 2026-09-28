@@ -9,6 +9,12 @@ MARKER_HINT = ("Marker gene preset (tef1, act, LSU...) chosen automatically from
                "transferred (CDS vs rRNA) and the genetic code. Shows 'auto-detect' "
                "until then.")
 
+# 红绿灯状态的配色与动作化文案（第 3/4 页共用，与 status_colors 帮助卡一致）
+STATUS_COLOR = {"green": "#1a7f37", "yellow": "#9a6700", "red": "#cf222e"}
+STATUS_MARK = {"green": "✓ Ready", "yellow": "⚠ Warnings", "red": "✗ Needs review"}
+STATUS_HINT = {"green": "Ready", "yellow": "Ready - review the warnings below",
+               "red": "Needs review - fix it or confirm before export"}
+
 HELP = {
     "status_colors": (
         "Traffic-light status",

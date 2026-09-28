@@ -118,9 +118,19 @@ class FeatureTable(QTableWidget):
         else:
             self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
-    def _emit_edited(self, _row, _col):
-        if not self._loading:
-            self.edited.emit()
+    def _fit_row_height(self, row: int, text: str):
+        """行高随 qualifier 行数增长，多行内容完整可见（否则被单行行高裁掉）。"""
+        n_lines = max(1, text.count("\n") + 1)
+        self.setRowHeight(row, n_lines * self.fontMetrics().height() + 8)
+
+    def _emit_edited(self, row, col):
+        if self._loading:
+            return
+        if col == 3:    # 编辑 Qualifiers 时行高跟随行数
+            item = self.item(row, 3)
+            if item is not None:
+                self._fit_row_height(row, item.text())
+        self.edited.emit()
 
     def build_from_features(self, features):
         self._loading = True
@@ -135,7 +145,11 @@ class FeatureTable(QTableWidget):
             self.setItem(row, 0, type_item)
             self.setItem(row, 1, QTableWidgetItem(strand))
             self.setItem(row, 2, QTableWidgetItem(_coords_text(feat)))
-            self.setItem(row, 3, QTableWidgetItem(_quals_text(feat)))
+            quals = _quals_text(feat)
+            q_item = QTableWidgetItem(quals)
+            q_item.setToolTip(quals)    # 列宽不足时悬停看全文
+            self.setItem(row, 3, q_item)
+            self._fit_row_height(row, quals)
             if feat.ftype == "source":
                 # source 坐标固定为全长，禁止编辑链/坐标（§2.4）
                 for col in (1, 2):

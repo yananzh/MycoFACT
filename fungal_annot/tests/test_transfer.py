@@ -64,7 +64,9 @@ def test_partial_and_coordinates(ref_record_seq, ref_gb_text):
     # gene 单区间跨内含子：201..1149 裁剪后 1..849
     assert (gene.parts[0].start, gene.parts[0].end) == (1, 849)
     codes = {i.code for i in out.issues}
-    assert "exon_outside_aligned" in codes      # 区段外 = warning
+    assert "exon_outside_aligned" in codes      # 区段外 → info（partial 常态，不染黄）
+    assert any(i.code == "exon_outside_aligned" and i.level == "info"
+               for i in out.issues)
     assert "exon_map_fail" not in codes
 
 

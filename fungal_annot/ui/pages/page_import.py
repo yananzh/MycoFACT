@@ -93,7 +93,6 @@ class ImportBox(QPlainTextEdit):
 
     def load_paths(self, paths: list[str]):
         """把文件内容读入输入框（追加）。裸序列文件自动补上以文件名命名的 FASTA 头。"""
-        from PyQt6.QtGui import QTextCursor
         for p in paths:
             try:
                 with open(p, encoding="utf-8", errors="replace") as fh:

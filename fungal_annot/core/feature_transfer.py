@@ -163,8 +163,11 @@ def transfer_features(ref_features, mapping, query_len: int,
                 parts_rc[-1].partial_high = True
         if dropped_outside or clipped:
             n = dropped_outside + clipped
+            # info 而非 warning：扩增子不含完整基因是常态（参考几乎总有侧翼区），
+            # 区段已按 partial 正确处理；保持 warning 会把每次正常注释都染黄，
+            # 淹没真正需要核对的提示（N 边界、密码表冲突等）。
             issues.append(Issue(
-                "warning", "exon_outside_aligned",
+                "info", "exon_outside_aligned",
                 f"{feat.ftype}: {n} segment(s) outside the query-covered region ({dropped_outside} fully outside, "
                 f"clipped {clipped}); treated as partial (partial amplicons are normal, not an error)"))
 

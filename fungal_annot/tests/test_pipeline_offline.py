@@ -24,7 +24,10 @@ def test_end_to_end_plus(ref_record_seq, ref_gb_text, tmp_path):
     seq, _ = ref_record_seq
     q = query_plus_insertion(seq)
     res = annotate_sequence(_mk(q), CFG, reference_gb_text=ref_gb_text)
-    assert res.status == "yellow", [i.message for i in res.issues]
+    # 区段超出扩增区属常态且已按 partial 处理 → info，不再把序列染黄
+    assert res.status == "green", [f"{i.level}: {i.message}" for i in res.issues]
+    assert any(i.code == "exon_outside_aligned" and i.level == "info"
+               for i in res.issues)
     tbl = res.tbl_text
 
     assert tbl.startswith(">Feature user_seq")
@@ -171,7 +174,8 @@ def test_end_to_end_reverse(ref_record_seq, ref_gb_text):
     seq, _ = ref_record_seq
     q = revcomp(seq[300:1600])
     res = annotate_sequence(_mk(q), CFG, reference_gb_text=ref_gb_text)
-    assert res.status == "yellow"
+    # 裁剪区段 → info（常态，不染黄），状态为 green
+    assert res.status == "green", [f"{i.level}: {i.message}" for i in res.issues]
     assert res.provenance.orientation == "reverse"
     # 互补链：区段降序 + partial 标记在高坐标端
     assert ">1300\t1001\tCDS" in res.tbl_text

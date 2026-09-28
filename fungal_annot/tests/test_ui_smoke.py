@@ -510,6 +510,32 @@ def test_loaded_project_reexports_without_crash(window, tmp_path, ref_record_seq
     assert out_tbl == res.tbl_text
 
 
+def test_hit_table_title_tooltip_wrapped(qtbot):
+    """回归：Title 列 tooltip 必须折行——GenBank 定义行可达数百字符，单行 tooltip
+    会横跨屏幕；且推荐行不得覆盖标题全文（两者需合并）。"""
+    from fungal_annot.core.blast_runner import BlastHit
+    from fungal_annot.ui.widgets import hit_table as ht
+
+    long_title = ("Fusarium oxysporum f. sp. lycopersici strain Fol4287 chromosome 1, "
+                  "complete sequence, whole genome shotgun sequence") * 2
+    table = ht.HitTable()
+    qtbot.addWidget(table)
+    table.populate([BlastHit(accession="NC_000001.1", title=long_title, pident=99.0,
+                             qcovs=100.0, subject_len=1000, flags={}),
+                    BlastHit(accession="AA000002", title="short title", pident=98.0,
+                             qcovs=100.0, subject_len=1000, flags={})],
+                   query_len=900)
+    tip = table.item(0, 1).toolTip()
+    assert "\n" in tip                                        # 已折行
+    assert max(len(line) for line in tip.splitlines()) <= 78  # 宽度受控
+    table.mark_recommended(0)
+    merged = table.item(0, 1).toolTip()
+    assert "Recommended" in merged and long_title[:40] in merged   # 合并而非覆盖
+    table.mark_recommended(0)                                 # 重复调用幂等
+    assert table.item(0, 1).toolTip().count("Recommended") == 1
+    assert table.item(1, 1).toolTip() == ""                   # 短标题不设冗余提示
+
+
 def test_reference_row_radio_default_and_pick(window):
     """Phase 2 简化：命中表每行单选框，默认第一行（推荐），点选即生效。"""
     from fungal_annot.core.blast_runner import BlastHit
@@ -826,7 +852,7 @@ def test_review_issues_hidden_when_clean(window, ref_record_seq, ref_gb_text, mo
     from PyQt6.QtWidgets import QInputDialog
 
     from fungal_annot.core.models import Issue, SeqInput
-    from fungal_annot.services.pipeline import SeqResult, Provenance, annotate_sequence
+    from fungal_annot.services.pipeline import annotate_sequence
 
     seq, _ = ref_record_seq
     window.add_sequence(SeqInput(seq_id="g1", seq=seq[300:1600], gene_type="tef1",
