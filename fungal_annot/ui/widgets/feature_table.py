@@ -4,7 +4,7 @@
 坐标列格式："<1..300, 401..852"（升序区段，'<'/'> ' 前缀表示该端 partial）；
 qualifier 列格式：每行 "key: value"。解析失败抛 ValueError 并定位行号。
 """
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QAbstractItemView, QHeaderView, QTableWidget,
                              QTableWidgetItem)
@@ -84,16 +84,27 @@ def parse_quals(text: str) -> dict:
 
 
 class FeatureTable(QTableWidget):
+    edited = pyqtSignal()       # 用户编辑（含增删行）后发出，页面据此防抖重验
+
     def __init__(self, parent=None):
         super().__init__(0, len(_COL_TYPES), parent)
         self.setHorizontalHeaderLabels(_COL_TYPES)
+        self.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.setColumnWidth(0, 110)
-        self.setColumnWidth(1, 40)
+        self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.setColumnWidth(2, 220)
+        self._loading = False
+        self.cellChanged.connect(self._emit_edited)
+
+    def _emit_edited(self, _row, _col):
+        if not self._loading:
+            self.edited.emit()
 
     def build_from_features(self, features):
+        self._loading = True
         self.setRowCount(0)
         for feat in features:
             row = self.rowCount()
@@ -111,6 +122,40 @@ class FeatureTable(QTableWidget):
                 for col in (1, 2):
                     item = self.item(row, col)
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self._loading = False
+
+    def add_feature(self, ftype: str, coords: str, strand: str = "+") -> int:
+        """插入一行待编辑的 feature（默认值由页面给定），返回新行号。"""
+        self._loading = True
+        row = self.rowCount()
+        self.insertRow(row)
+        type_item = QTableWidgetItem(ftype)
+        type_item.setForeground(QColor(_TYPE_COLORS.get(ftype, "#24292f")))
+        type_item.setFont(_mono_font())
+        self.setItem(row, 0, type_item)
+        self.setItem(row, 1, QTableWidgetItem(strand))
+        self.setItem(row, 2, QTableWidgetItem(coords))
+        self.setItem(row, 3, QTableWidgetItem(""))
+        self._loading = False
+        self.setCurrentCell(row, 0)
+        return row
+
+    def selected_rows(self) -> list[int]:
+        """当前选中行号（倒序，便于安全删除）。"""
+        return sorted({i.row() for i in self.selectedIndexes()}, reverse=True)
+
+    def remove_rows(self, rows: list[int]) -> str | None:
+        """删除指定行；source 行不可删（.tbl/.fsa 生成依赖它），返回原因或 None。"""
+        for r in rows:
+            item = self.item(r, 0)
+            if item is not None and item.text().strip() == "source":
+                return ("The source row cannot be deleted - "
+                        "edit its qualifiers instead.")
+        self._loading = True
+        for r in rows:
+            self.removeRow(r)
+        self._loading = False
+        return None
 
     def to_features(self) -> list[Feature]:
         out = []

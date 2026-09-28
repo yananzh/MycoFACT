@@ -274,13 +274,19 @@ def test_project_save_load_roundtrip(window, tmp_path, ref_record_seq, ref_gb_te
     res = annotate_sequence(window.sequences[0], window.make_config(),
                             reference_gb_text=ref_gb_text)
     window.results["p1"] = res
+    window.confirmed["p1"] = True       # 红灯确认与导出标记必须跨会话保留
+    window.exported = True
     path = str(tmp_path / "proj.json")
     save_project(path, window.sequences, window.hits, window.selected_ref,
-                 window.results, window.settings)
-    sequences, hits, selected_ref, results, settings = load_project(path)
+                 window.results, window.settings,
+                 confirmed=window.confirmed, exported=window.exported)
+    (sequences, hits, selected_ref, results, settings,
+     confirmed, exported) = load_project(path)
     assert [s.seq_id for s in sequences] == ["p1"]
     assert results["p1"].status == res.status
     assert results["p1"].tbl_text == res.tbl_text
+    assert confirmed == {"p1": True}
+    assert exported is True
 
 
 def test_alignment_text_columns_truly_aligned(window, ref_record_seq, ref_gb_text):
@@ -388,18 +394,40 @@ def test_import_box_flow(window):
     assert window.stack.currentIndex() == 1        # 全有 hits → 同步排空跳转
 
 
-def test_import_page_has_no_sequence_table(window):
-    """P1 简化：无序列表格；四按钮 BLAST/Browse/Clear/STOP 水平排列，
-    仅 BLAST 为主按钮样式（次级描边为默认）。"""
+def test_import_page_sequence_list_and_buttons(window):
+    """P1 序列清单（2026-09-28 恢复并增强）：ID/长度/基因型/BLAST/删除列；
+    五按钮 BLAST/Browse/Example/Clear/STOP 水平排列，仅 BLAST 为主按钮样式。"""
     from PyQt6.QtWidgets import QPushButton, QTableWidget
 
     page = window.page_import
-    assert page.findChildren(QTableWidget) == []
+    tables = page.findChildren(QTableWidget)
+    assert len(tables) == 1 and tables[0] is page.seq_table
+    assert [page.seq_table.horizontalHeaderItem(i).text()
+            for i in range(page.seq_table.columnCount())] == \
+        ["Seq ID", "Length (bp)", "Marker", "BLAST", ""]
     buttons = page.findChildren(QPushButton)
-    assert [b.text() for b in buttons] == ["BLAST", "Browse", "Clear", "STOP"]
+    assert [b.text() for b in buttons] == ["BLAST", "Browse", "Example", "Clear", "STOP"]
     assert buttons[0].objectName() == "PrimaryButton"      # BLAST 主行动
     assert all(b.objectName() == "" for b in buttons[1:])  # 其余默认描边
+    widths = {(b.minimumWidth(), b.maximumWidth()) for b in buttons}   # 五按钮等宽
+    assert len(widths) == 1 and buttons[0].minimumWidth() == buttons[0].maximumWidth()
     assert not hasattr(page, "_remove_selected") and not hasattr(page, "_paste_clipboard")
+
+
+def test_example_button_loads_demo_fasta(window):
+    """Example 按钮：demo/example.fasta 载入输入框（追加、不触网），可正常解析；
+    状态栏报出序列条数并说明需点 BLAST 导入。"""
+    from fungal_annot.ui.pages.page_import import parse_pasted_input
+
+    page = window.page_import
+    page._load_example()
+    text = page.import_box.toPlainText()
+    assert text.startswith(">")
+    seqs = parse_pasted_input(text)
+    assert [s.seq_id for s in seqs] == ["ACT_G2", "TUB2_G2", "Gapdh_G2", "CAL_G2"]
+    assert all(len(s.seq) > 100 for s in seqs)
+    message = window.statusBar().currentMessage()
+    assert "4 sequence(s)" in message and "click BLAST to run" in message
 
 
 def test_import_page_blast_section(window):
@@ -466,7 +494,8 @@ def test_loaded_project_reexports_without_crash(window, tmp_path, ref_record_seq
     res = annotate_sequence(s, window.make_config(), reference_gb_text=ref_gb_text)
     path = str(tmp_path / "p.json")
     save_project(path, [s], {}, {}, {"u4": res}, {})
-    sequences, _hits, _sel, results, _st = load_project(path)
+    (sequences, _hits, _sel, results, _st,
+     _confirmed, _exported) = load_project(path)
 
     lite = results["u4"]
     assert [f.ftype for f in lite.features] == ["gene", "CDS"]  # feature 已恢复
@@ -498,8 +527,9 @@ def test_reference_row_radio_default_and_pick(window):
 
     # 默认选中第一行（推荐），且选择即写入状态
     assert window.selected_ref["r1"] == "AA000001"
-    assert page.lbl_choice.text() == "Reference: AA000001"
     assert page.b_annotate.isEnabled()
+    # Reference choice 区域已删：直接输入 accession 的入口不存在
+    assert not hasattr(page, "lbl_choice") and not hasattr(page, "accession_edit")
     # 点第二行的单选框 → 选择切换
     page.hit_table._radios[1].setChecked(True)
     assert window.selected_ref["r1"] == "AA000002"
@@ -546,3 +576,143 @@ def test_alignment_view_text(window, ref_record_seq, ref_gb_text):
     text = _alignment_text(res.detail.mapping, res.detail.ref_seq)
     assert "Orientation: forward" in text
     assert "|" in text          # 存在匹配标记
+
+
+# ---- P0/P1 修复回归（2026-09-28）----
+
+def test_import_dedupe_ids(window):
+    """整体查重：用户命名重复报错；pasted_seq 冲突自动编号。"""
+    from fungal_annot.core.models import SeqInput
+
+    page = window.page_import
+    window.add_sequence(SeqInput(seq_id="user_seq", seq="ACGT"))
+    with pytest.raises(ValueError):
+        page._dedupe_ids([SeqInput(seq_id="user_seq", seq="ACGT")])
+    seqs = [SeqInput(seq_id="pasted_seq", seq="ACGT"),
+            SeqInput(seq_id="pasted_seq", seq="TTTT")]
+    page._dedupe_ids(seqs)
+    assert [s.seq_id for s in seqs] == ["pasted_seq", "pasted_seq_2"]
+
+
+def test_start_blast_imports_box_and_lists_sequences(window, monkeypatch):
+    """BLAST 一键导入成功后清空输入框，序列出现在清单表里。"""
+    from PyQt6.QtCore import Qt
+
+    window.settings["email"] = "a@example.org"
+    monkeypatch.setattr(window, "start_blast", lambda: None)   # 不发网络请求
+    page = window.page_import
+    page.import_box.setPlainText("ACGTACGTACGT")
+    page._start()
+    assert [s.seq_id for s in window.sequences] == ["pasted_seq"]
+    assert page.import_box.toPlainText() == ""
+    assert page.seq_table.isVisibleTo(page)
+    assert page.seq_table.rowCount() == 1
+    assert page.seq_table.item(0, 0).text() == "pasted_seq"
+    # 长度/基因型/状态列只读
+    assert not page.seq_table.item(0, 1).flags() & Qt.ItemFlag.ItemIsEditable
+
+
+def test_rename_sequence_moves_stores_and_result(window):
+    """改名：SeqInput/命中/结果/确认随新名迁移，res.seq_id 同步。"""
+    from types import SimpleNamespace
+
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="old", seq="ACGT" * 5))
+    window.hits["old"] = []
+    window.results["old"] = SimpleNamespace(seq_id="old", status="green")
+    window.confirmed["old"] = True
+    window.rename_sequence("old", "new")
+    assert window.sequences[0].seq_id == "new"
+    assert "new" in window.hits and "old" not in window.hits
+    assert window.results["new"].seq_id == "new"
+    assert window.confirmed.get("new") is True
+
+
+def test_review_auto_revalidate_on_edit(window, qtbot, ref_record_seq, ref_gb_text):
+    """编辑坐标后防抖自动重验：无需点 Re-validate，红灯即时反映。"""
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import annotate_sequence
+
+    seq, _ = ref_record_seq
+    window.add_sequence(SeqInput(seq_id="u2", seq=seq[300:1600], gene_type="tef1",
+                                 source_qualifiers={"organism": "F. t",
+                                                    "country": "China"}))
+    window.results["u2"] = annotate_sequence(window.sequences[0], window.make_config(),
+                                             reference_gb_text=ref_gb_text)
+    page = window.page_review
+    page.refresh()
+    page.current = "u2"
+    page.load_result("u2")
+    row = next(r for r in range(page.feature_table.rowCount())
+               if page.feature_table.item(r, 0).text() == "CDS")
+    page.feature_table.item(row, 2).setText("1..300, 401..99999")
+    qtbot.waitUntil(lambda: window.results["u2"].status == "red", timeout=5000)
+    assert any(i.code == "coord_out_of_range" for i in window.results["u2"].issues)
+
+    # 非法坐标：行内提示、不弹窗、上次结果保留
+    page.feature_table.item(row, 2).setText("garbage")
+    qtbot.waitUntil(lambda: page.lbl_status.text().startswith("⚠"), timeout=5000)
+    assert window.results["u2"].status == "red"
+
+
+def test_feature_add_and_delete_row(window, qtbot, ref_record_seq, ref_gb_text):
+    """feature 行增删：source 行禁止删除（合成行验证守卫）；增删触发自动重验。"""
+    from fungal_annot.core.models import Feature, FeaturePart, SeqInput
+    from fungal_annot.services.pipeline import annotate_sequence
+
+    seq, _ = ref_record_seq
+    window.add_sequence(SeqInput(seq_id="u3", seq=seq[300:1600], gene_type="tef1",
+                                 source_qualifiers={"organism": "F. t",
+                                                    "country": "China"}))
+    window.results["u3"] = annotate_sequence(window.sequences[0], window.make_config(),
+                                             reference_gb_text=ref_gb_text)
+    page = window.page_review
+    page.refresh()
+    page.current = "u3"
+    page.load_result("u3")
+    n0 = page.feature_table.rowCount()
+
+    # source 行不可删（正常注释结果不含 source，用合成行验证守卫）
+    page.feature_table.build_from_features(
+        [Feature(ftype="source", strand=1, parts=[FeaturePart(1, 100)])])
+    page.feature_table.selectRow(0)
+    assert page.feature_table.remove_rows(page.feature_table.selected_rows())
+    page.load_result("u3")
+
+    # 删除 CDS 行 → 行数减少
+    cds_row = next(r for r in range(n0) if page.feature_table.item(r, 0).text() == "CDS")
+    page.feature_table.selectRow(cds_row)
+    page._delete_feature()
+    assert page.feature_table.rowCount() == n0 - 1
+
+    # 新增一行 CDS（覆盖全长）→ 防抖重验跑完并写日志
+    page._add_feature()
+    assert page.feature_table.rowCount() == n0
+    last = page.feature_table.rowCount() - 1
+    assert page.feature_table.item(last, 0).text() == "CDS"
+    qtbot.waitUntil(lambda: "Auto re-validated" in window.statusBar().currentMessage(),
+                    timeout=5000)
+
+
+def test_issue_click_opens_glossary(window, qtbot, monkeypatch):
+    """带术语卡的 issue（low_identity 等）点击弹出解释卡。"""
+    from fungal_annot.core.models import Issue, Provenance, SeqInput
+    from fungal_annot.services.pipeline import SeqResult
+
+    window.add_sequence(SeqInput(seq_id="u4", seq="ACGT" * 100, gene_type="tef1"))
+    res = SeqResult(seq_id="u4", status="red",
+                    issues=[Issue("error", "low_identity", "identity 90% < threshold")],
+                    provenance=Provenance())
+    window.results["u4"] = res
+    page = window.page_review
+    page.refresh()
+    page.current = "u4"
+    page.load_result("u4")
+    shown = []
+    # page_review 里是 `from ..widgets.help import show_help`，须 patch 其模块引用
+    monkeypatch.setattr("fungal_annot.ui.pages.page_review.show_help",
+                        lambda term, parent=None: shown.append(term))
+    item = page.issue_list.item(0)
+    page._on_issue_clicked(item)
+    assert shown == ["identity"]

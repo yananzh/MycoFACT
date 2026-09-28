@@ -50,7 +50,8 @@ def _feature_from_dict(d):
 
 
 def save_project(path: str, sequences, hits: dict, selected_ref: dict,
-                 results: dict, settings: dict | None = None) -> None:
+                 results: dict, settings: dict | None = None,
+                 confirmed: dict | None = None, exported: bool = False) -> None:
     data = {
         "version": PROJECT_VERSION,
         "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -72,6 +73,10 @@ def save_project(path: str, sequences, hits: dict, selected_ref: dict,
             "fsa_text": r.fsa_text,
             "features": [_feature_to_dict(f) for f in (r.features or [])],
         } for k, r in results.items()},
+        # 审核状态一并持久化：红灯手动确认与已导出标记必须跨会话保留，
+        # 否则重新打开项目后导出被再次拦截（确认作废）
+        "confirmed": dict(confirmed or {}),
+        "exported": bool(exported),
         "settings": settings or {},
     }
     tmp = path + ".tmp"
@@ -81,7 +86,7 @@ def save_project(path: str, sequences, hits: dict, selected_ref: dict,
 
 
 def load_project(path: str):
-    """返回 (sequences, hits, selected_ref, results, settings)。
+    """返回 (sequences, hits, selected_ref, results, settings, confirmed, exported)。
 
     results 反序列化为轻量 SeqResultLite（detail=None）。"""
     from ..core.blast_runner import BlastHit
@@ -117,7 +122,8 @@ def load_project(path: str):
         res.provenance = prov
         results[k] = res
 
-    return sequences, hits, selected_ref, results, data.get("settings", {})
+    return (sequences, hits, selected_ref, results, data.get("settings", {}),
+            data.get("confirmed", {}), bool(data.get("exported", False)))
 
 
 @dataclass

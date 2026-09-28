@@ -1,10 +1,9 @@
 """P3 参考选择页（§7.2）：命中表每行一个单选框，点选即生效（默认第一行=推荐）；
-支持直接输入 accession；"Use recommended for all" 一键全部用推荐。"""
-from PyQt6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                             QListWidget, QMessageBox, QPushButton,
-                             QProgressBar, QVBoxLayout, QWidget)
+"Use recommended for all" 一键全部用推荐。"""
+from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+                             QPushButton, QProgressBar, QVBoxLayout, QWidget)
 
-from ..icons import icon
+from ..widgets.help import HelpButton, MARKER_HINT
 from ..widgets.hit_table import HitTable
 
 
@@ -14,60 +13,51 @@ class PageReference(QWidget):
     def __init__(self, win):
         super().__init__()
         self.win = win
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
 
+        body = QHBoxLayout()
         left = QVBoxLayout()
         left.addWidget(QLabel("Sequences"))
         self.seq_list = QListWidget()
+        self.seq_list.setMaximumWidth(200)   # 名单列不挤占命中表（窄窗口下尤甚）
         self.seq_list.currentRowChanged.connect(self._on_seq_selected)
         left.addWidget(self.seq_list, 1)
-        b_rec_all = QPushButton("Use recommended (first hit) for all")
-        b_rec_all.clicked.connect(self._use_recommended_all)
-        left.addWidget(b_rec_all)
-        layout.addLayout(left, 1)
+        body.addLayout(left, 1)
 
         right = QVBoxLayout()
+        hits_header = QHBoxLayout()
+        hits_header.addWidget(QLabel("BLAST hits"))
+        hits_header.addStretch(1)
+        hits_header.addWidget(HelpButton("hit_columns"))   # qcovs / Len ratio 就地解释
+        right.addLayout(hits_header)
         self.hit_table = HitTable()
         right.addWidget(self.hit_table, 1)
-
-        choice = QGroupBox("Reference choice")
-        c_layout = QVBoxLayout(choice)
-        c_layout.addWidget(QLabel("Selected reference:"))
-        self.lbl_choice = QLabel("-")
-        self.lbl_choice.setObjectName("Hint")
-        c_layout.addWidget(self.lbl_choice)
-        acc_row = QHBoxLayout()
-        self.accession_edit = QLineEdit()
-        self.accession_edit.setPlaceholderText(
-            "Use a reference not in the list? Enter its accession (e.g. MZ123456.1)")
-        b_use_acc = QPushButton("Use this accession")
-        b_use_acc.clicked.connect(self._use_typed_accession)
-        acc_row.addWidget(self.accession_edit, 1)
-        acc_row.addWidget(b_use_acc)
-        c_layout.addLayout(acc_row)
-        right.addWidget(choice)
-
-        btns = QHBoxLayout()
-        self.b_annotate = QPushButton(icon("fa5s.play", "#ffffff"), "Start Annotation →")
-        self.b_annotate.setObjectName("PrimaryButton")
-        self.b_annotate.clicked.connect(self._start_annotate)
-        self.b_cancel = QPushButton("Cancel pending")
-        self.b_cancel.clicked.connect(self.win.annotate_queue.cancel)
-        btns.addWidget(self.b_annotate)
-        btns.addWidget(self.b_cancel)
-        btns.addStretch(1)
-        right.addLayout(btns)
-
         self.progress = QProgressBar()
         right.addWidget(self.progress)
-        layout.addLayout(right, 2)
+        body.addLayout(right, 2)
+        layout.addLayout(body, 1)
+
+        # ---- 底部动作行：跨左右两栏水平排列 ----
+        btns = QHBoxLayout()
+        b_rec_all = QPushButton("Use recommended for all")
+        b_rec_all.setToolTip("Set every sequence's reference to its top-ranked (first) hit")
+        b_rec_all.clicked.connect(self._use_recommended_all)
+        btns.addWidget(b_rec_all)
+        self.b_annotate = QPushButton("Start Annotation →")
+        self.b_annotate.setObjectName("PrimaryButton")
+        self.b_annotate.clicked.connect(self._start_annotate)
+        btns.addWidget(self.b_annotate)
+        btns.addStretch(1)
+        layout.addLayout(btns)
 
     # ---- 展示 ----
     def refresh(self):
         self.seq_list.blockSignals(True)
         self.seq_list.clear()
         for s in self.win.sequences:
-            self.seq_list.addItem(f"{s.seq_id} ({s.gene_type or 'auto'})")
+            item = QListWidgetItem(f"{s.seq_id} ({s.gene_type or 'auto-detect'})")
+            item.setToolTip(MARKER_HINT)
+            self.seq_list.addItem(item)
         self.seq_list.blockSignals(False)
         # 未做选择的序列自动取推荐（第一行）；此后 Start Annotation 全序列就绪才可点
         for s in self.win.sequences:
@@ -96,14 +86,12 @@ class PageReference(QWidget):
                                 on_select=self._on_hit_picked,
                                 chosen=self.win.selected_ref.get(s.seq_id))
         self._highlight_recommended()
-        self.lbl_choice.setText(f"Reference: {self.win.selected_ref.get(s.seq_id) or '-'}")
 
     def _on_hit_picked(self, accession: str):
         """命中表行内单选框回调：选择即写入状态，无需再点保存。"""
         sid = self._current_sid()
         if sid:
             self.win.selected_ref[sid] = accession
-            self.lbl_choice.setText(f"Reference: {accession}")
             self.b_annotate.setEnabled(True)
             self.b_annotate.setToolTip("")
 
@@ -124,30 +112,15 @@ class PageReference(QWidget):
         self.win.log("All sequences set to their recommended (top-ranked) reference.")
         self.refresh()
 
-    def _use_typed_accession(self):
-        sid = self._current_sid()
-        acc = self.accession_edit.text().strip()
-        if not sid or not acc:
-            QMessageBox.warning(self, "Missing accession",
-                                "Select a sequence and enter an accession.")
-            return
-        # 若与表中命中一致，联动该行单选框；否则直接记录（走直接下载通道）
-        if not self.hit_table.select_accession(acc):
-            self.win.selected_ref[sid] = acc
-            self.lbl_choice.setText(f"Reference: {acc}")
-        self.win.log(f"[{sid}] reference set to {acc}")
-
     # ---- 注释任务 ----
     def _start_annotate(self):
         if not self.b_annotate.isEnabled():
             return
         self.win.start_annotation()
         self.b_annotate.setEnabled(False)
-        self.b_cancel.setEnabled(True)
 
     def on_queue_finished(self):
         self.b_annotate.setEnabled(True)
-        self.b_cancel.setEnabled(False)
         self.progress.setValue(self.progress.maximum())
         if self.win.results:
             self.win.go_page(2)      # 注释完成 → 进入审核页

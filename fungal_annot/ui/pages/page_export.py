@@ -3,7 +3,7 @@
 BankIt 门户模式：.tbl 只含 gene/CDS 等 feature（source 由门户表单采集），
 因此 table2asn 预检不再适用，已随自包含模式一并移除。
 """
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                              QMessageBox, QPushButton, QTableWidget,
@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QLineEdit,
 
 from ...services.pipeline import write_outputs
 from ..icons import icon
+from ..widgets.help import MARKER_HINT
 
 
 class PageExport(QWidget):
@@ -25,8 +26,11 @@ class PageExport(QWidget):
 
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
-            ["Seq ID", "Gene type", "Status", "Features", "Reference", "Region",
+            ["Seq ID", "Marker", "Status", "Features", "Reference", "Region",
              "Orientation", "Confirmed"])
+        self.table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.table.horizontalHeaderItem(1).setToolTip(MARKER_HINT)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self.table, 1)
 
@@ -56,7 +60,7 @@ class PageExport(QWidget):
         layout.addLayout(btns)
 
         self.lbl_hint = QLabel(
-            "Red sequences without manual confirmation are blocked from export (§7.2 P5). "
+            "Red sequences without manual confirmation are blocked from export. "
             "The .tbl contains gene/CDS features only - organism and source modifiers are "
             "entered in the BankIt portal (GB2sequin-style workflow). Results were "
             "validated at annotation time and after every edit.")
@@ -75,7 +79,8 @@ class PageExport(QWidget):
             row = self.table.rowCount()
             self.table.insertRow(row)
             if res is None:
-                for col, text in enumerate([s.seq_id, s.gene_type, "not annotated", "-", "-", "-", "-", "-"]):
+                for col, text in enumerate([s.seq_id, s.gene_type or "auto-detect",
+                                            "not annotated", "-", "-", "-", "-", "-"]):
                     self.table.setItem(row, col, QTableWidgetItem(text))
                 continue
             p = res.provenance
@@ -91,7 +96,7 @@ class PageExport(QWidget):
         if blocked:
             QMessageBox.warning(
                 self, "Export blocked",
-                "These RED sequences lack manual confirmation and cannot be exported (§7.2 P4):\n"
+                "These RED sequences lack manual confirmation and cannot be exported:\n"
                 + "\n".join(blocked)
                 + "\n\nUse the 'Manual confirm' button on the Review page.")
             return

@@ -92,6 +92,7 @@ class MainWindow(QMainWindow):
         self.selected_ref: dict[str, str | None] = {}
         self.results: dict[str, object] = {}
         self.confirmed: dict[str, bool] = {}
+        self._blast_running: set[str] = set()   # 已提交 BLAST、尚未返回的序列
         self.last_export_dir = os.path.join(os.path.expanduser("~"), "fungal_annot_out")
         self.exported = False
 
@@ -302,6 +303,14 @@ class MainWindow(QMainWindow):
             for store in (self.hits, self.results, self.selected_ref, self.confirmed):
                 if old in store:
                     store[new] = store.pop(old)
+            # SeqInput 与结果对象自身的 seq_id 同步改（导出文件名取自 res.seq_id）
+            for s in self.sequences:
+                if s.seq_id == old:
+                    s.seq_id = new
+            res = self.results.get(new)
+            if res is not None and getattr(res, "seq_id", None) == old:
+                res.seq_id = new
+        self.update_summary()
 
     def reset_results(self):
         self.results.clear()
@@ -333,12 +342,14 @@ class MainWindow(QMainWindow):
     def start_blast(self):
         self.blast_queue.reset()
         self._blast_pending = 0
+        self._blast_running.clear()
         for s in self.sequences:
             if s.seq_id in self.hits:
                 continue
             self.blast_queue.submit(BlastWorker(s, self.make_config(),
                                                 self.blast_queue.signals))
             self._blast_pending += 1
+            self._blast_running.add(s.seq_id)
         if self._blast_pending == 0:
             self.log("All sequences already have BLAST hits - continue to reference selection.")
             self.page_import.on_queue_finished()
@@ -384,11 +395,13 @@ class MainWindow(QMainWindow):
         from ..services.pipeline import SeqResult
         self.update_summary()
         if isinstance(payload, list):
+            self._blast_running.discard(seq_id)
             if any(s.seq_id == seq_id for s in self.sequences):
                 self.hits[seq_id] = payload   # 序列已被丢弃则不落陈旧命中
             self._blast_pending -= 1
             self.page_import.progress.setValue(
                 self.page_import.progress.maximum() - self._blast_pending)
+            self.page_import.refresh()        # 清单里该序列的 BLAST 状态即时更新
             if self._blast_pending <= 0:
                 self.page_import.on_queue_finished()
                 if self.sequences:            # 项目已丢弃则不再强制跳转
@@ -403,6 +416,7 @@ class MainWindow(QMainWindow):
 
     def _on_worker_failed(self, seq_id: str, message: str):
         self.log(f"[{seq_id}] Failed: {message.splitlines()[-1] if message else ''}")
+        self._blast_running.discard(seq_id)
         if seq_id in [s.seq_id for s in self.sequences]:
             if self._blast_pending > 0:
                 self._blast_pending -= 1
@@ -438,7 +452,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
         save_project(path, self.sequences, self.hits, self.selected_ref,
-                     self.results, self.settings)
+                     self.results, self.settings, confirmed=self.confirmed,
+                     exported=self.exported)
         self.log(f"Project saved: {path}")
 
     def _open_project(self):
@@ -447,7 +462,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            sequences, hits, selected_ref, results, settings = load_project(path)
+            (sequences, hits, selected_ref, results, settings,
+             confirmed, exported) = load_project(path)
         except (OSError, ValueError, KeyError) as ex:
             QMessageBox.warning(self, "Failed to open", str(ex))
             return
@@ -455,12 +471,16 @@ class MainWindow(QMainWindow):
         self.hits = hits
         self.selected_ref = selected_ref
         self.results = results
-        self.confirmed = {}
+        self.confirmed = confirmed      # 红灯确认随项目恢复，导出拦截状态一致
+        self.exported = exported
+        self._blast_running.clear()
         self.settings = settings or self.settings
         self.page_import.refresh()
         self.page_reference.refresh()
         self.page_review.refresh()
+        self.page_export.refresh()
         self.update_summary()
+        self._refresh_nav()
         self.log(f"Project loaded: {path} ({len(sequences)} sequence(s))")
 
     def _open_settings(self):

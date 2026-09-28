@@ -17,9 +17,10 @@ marker）自动生成 NCBI 五列 feature table（.tbl）。设计文档见《�
 python main.py        # 启动 GUI
 ```
 
-四步流程：序列导入并跑 BLAST（拖入 / 浏览 / 粘贴 FASTA 或裸序列；队列排空后自动进入
-下一步）→ 参考选择（命中表行内单选 / 直接输入 accession）→ 注释审核（可编辑 feature
-表格、即时重验、比对视图、红灯人工确认）→ 验证汇总与导出（.tbl + .fsa + 报告）。
+四步流程：序列导入并跑 BLAST（拖入 / 浏览 / 粘贴 FASTA 或裸序列，或点 Example 载入
+内置示例 demo/example.fasta；队列排空后自动进入下一步）→ 参考选择（命中表行内单选，
+默认推荐行）→ 注释审核（可编辑 feature 表格、即时重验、比对视图、红灯人工
+确认）→ 验证汇总与导出（.tbl + .fsa + 报告）。
 .tbl 为 BankIt 门户格式（只含 gene/CDS 等 feature，organism 在门户表单录入）。
 四个步骤以水平步骤条置于窗口顶部，点击已解锁的步骤即可跳转。
 参考统一在线解析（命中 accession / 直接下载）；本地参考 GenBank 离线模式仅 CLI

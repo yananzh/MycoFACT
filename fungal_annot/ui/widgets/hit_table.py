@@ -1,31 +1,42 @@
-"""BLAST 命中表格（§7.2 P3）：accession / 标题 / pident / qcovs / 长度比 / 标记 /
+"""BLAST 命中表格（§7.2 P3）：accession / 标题 / pident / qcovs / 长度比 /
 **行内单选框**（点选即选为参考，默认第一行=推荐）。
 
-标星：★=模式菌株或培养物记录（title 线索），R=RefSeq（仅 rRNA 类预设加分）。
+推荐行用整行淡蓝底标示（§6.1 排序第一名），Use 列的单选框默认勾选该行；
 长度比 = 参考长度 / 查询长度，约 1.0–1.5 为推荐区间（§6.1 长度偏好）。
 """
+import re
+
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QAbstractItemView, QHeaderView, QRadioButton,
                              QTableWidget, QTableWidgetItem)
 
-_CULTURE = ("CBS", "ATCC", "CMCC", "NRRL", "ex-type", "ex type", "holotype",
-            "neotype", "epitype", "paratype", "type strain")
+# 老式 NCBI 标题前缀 "gi|1779767538|gb|MK967294.1|" —— accession 已单列展示，
+# 显示时剥掉以留出有效描述空间（tooltip 保留原始全文）
+_GI_PREFIX = re.compile(r"^gi\|\d+\|[A-Za-z_]+\|[^|\s]+\|\s*")
 
 
 def _fmt_title(title: str, limit: int = 64) -> str:
-    return title if len(title) <= limit else title[:limit - 1] + "…"
+    t = _GI_PREFIX.sub("", title)
+    return t if len(t) <= limit else t[:limit - 1] + "…"
 
 
 class HitTable(QTableWidget):
     def __init__(self, parent=None):
-        super().__init__(0, 7, parent)
-        self.setHorizontalHeaderLabels(["accession", "Title", "pident %", "qcovs %",
-                                        "Len ratio", "Marker", "Use"])
+        super().__init__(0, 6, parent)
+        self.setHorizontalHeaderLabels(["accession", "Title", "Ident %", "Cover %",
+                                        "Ratio", "Use"])
+        self.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)   # 与单元格左对齐一致
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.setColumnWidth(6, 46)
+        for col in (2, 3, 4):   # 数字列按内容自适应：表头文字任何字体下都完整可见
+            self.horizontalHeader().setSectionResizeMode(
+                col, QHeaderView.ResizeMode.ResizeToContents)
+        self.setColumnWidth(5, 46)      # Use
         self._on_select = None
         self._radios: list[QRadioButton] = []
         self._accessions: list[str] = []
@@ -41,9 +52,6 @@ class HitTable(QTableWidget):
             row = self.rowCount()
             self.insertRow(row)
             self._accessions.append(h.accession)
-            star = "★" if h.flags.get("culture") else ""
-            ref = "R" if h.flags.get("refseq") else ""
-            marker = (star + ref).strip() or "—"
             ratio = (h.subject_len / query_len) if query_len and h.subject_len else 0.0
             items = [
                 QTableWidgetItem(h.accession),
@@ -51,8 +59,8 @@ class HitTable(QTableWidget):
                 QTableWidgetItem(f"{h.pident:.2f}"),
                 QTableWidgetItem(f"{h.qcovs:.1f}"),
                 QTableWidgetItem(f"{ratio:.2f}"),
-                QTableWidgetItem(marker),
             ]
+            items[1].setToolTip(h.title)    # 标题列宽有限，悬停看全文
             for col, item in enumerate(items):
                 self.setItem(row, col, item)
             # 长度比着色：1.0–1.5 绿（推荐区间），>2 黄（基因组级）
@@ -71,7 +79,7 @@ class HitTable(QTableWidget):
             radio = QRadioButton()
             radio.setToolTip("Use this hit as the reference")
             radio.toggled.connect(lambda on, r=radio, i=row: self._radio_toggled(on, r, i))
-            self.setCellWidget(row, 6, radio)
+            self.setCellWidget(row, 5, radio)
             self._radios.append(radio)
         if not self._radios:
             return
@@ -84,21 +92,15 @@ class HitTable(QTableWidget):
         self._radios[default_row].setChecked(True)   # 触发一次 on_select
 
     def mark_recommended(self, row: int):
-        """排序第一名：整行淡蓝底 + 标题列加推荐徽章（§6.1）。"""
+        """排序第一名：整行淡蓝底（§6.1）；悬停任意单元格可见推荐说明。"""
         if row < 0 or row >= self.rowCount():
             return
-        title_item = self.item(row, 1)
-        title_item.setText("★ Recommended — " + title_item.text())
-        for col in range(self.columnCount() - 1):    # 选择列不涂底色
-            self.item(row, col).setBackground(QColor("#eaf2fc"))
-
-    def select_accession(self, accession: str) -> bool:
-        """勾选指定 accession 行的单选框；不在表中返回 False。"""
-        for i, acc in enumerate(self._accessions):
-            if acc == accession:
-                self._radios[i].setChecked(True)
-                return True
-        return False
+        tip = "Recommended - top-ranked hit by identity, coverage and length"
+        for col in range(self.columnCount()):    # 选择列的单选框不涂底色，但提示保留
+            item = self.item(row, col)
+            if item is not None:
+                item.setBackground(QColor("#eaf2fc"))
+                item.setToolTip(tip)
 
     def current_accession(self) -> str | None:
         row = self.currentRow()

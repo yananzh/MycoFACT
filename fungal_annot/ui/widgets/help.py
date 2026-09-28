@@ -3,6 +3,12 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QMessageBox, QToolButton
 
+# "Marker" 列的就地解释（第 1/2/4 页共用）：说明自动判定机制与其影响
+MARKER_HINT = ("Marker gene preset (tef1, act, LSU...) chosen automatically from BLAST "
+               "hit titles during annotation - it controls which features are "
+               "transferred (CDS vs rRNA) and the genetic code. Shows 'auto-detect' "
+               "until then.")
+
 HELP = {
     "partial": (
         "Partial feature",
@@ -37,12 +43,25 @@ HELP = {
         "misplaced exon boundaries, so a human should confirm the choice.</p>"),
     "hit_columns": (
         "Hit table columns",
-        "<p><b>qcovs</b> — percentage of your query covered by the hit; 100% is required for "
-        "reliable end annotation.</p>"
-        "<p><b>Len ratio</b> — reference length / query length. About 1.0–1.5 is ideal: your "
-        "amplicon sits <i>inside</i> the reference with flanking context on both sides. "
-        "Values far above 2 indicate a genome-scale record (windowed fetch will be used).</p>"),
+        "<p><b>Cover %</b> — percentage of your query covered by the hit (BLAST qcovs); "
+        "100% is required for reliable end annotation.</p>"
+        "<p><b>Ratio</b> — reference length / query length (Len ratio). About 1.0–1.5 is "
+        "ideal: your amplicon sits <i>inside</i> the reference with flanking context on "
+        "both sides. Values far above 2 indicate a genome-scale record (windowed fetch "
+        "will be used).</p>"
+        "<p><b>Ident %</b> — nucleotide identity of the hit (BLAST pident).</p>"),
 }
+
+
+def show_help(term: str, parent=None):
+    """按词条名弹出富文本术语解释（供 HelpButton 与 issue 行点击共用）。"""
+    title, body = HELP[term]
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setTextFormat(Qt.TextFormat.RichText)
+    box.setText(body)
+    box.setIcon(QMessageBox.Icon.Information)
+    box.exec()
 
 
 class HelpButton(QToolButton):
@@ -57,10 +76,4 @@ class HelpButton(QToolButton):
         self.clicked.connect(self._show)
 
     def _show(self):
-        title, body = HELP[self.term]
-        box = QMessageBox(self)
-        box.setWindowTitle(title)
-        box.setTextFormat(Qt.TextFormat.RichText)
-        box.setText(body)
-        box.setIcon(QMessageBox.Icon.Information)
-        box.exec()
+        show_help(self.term, self)

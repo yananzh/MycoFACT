@@ -1,19 +1,22 @@
 """P1 导入 & BLAST 页（§7.2 + 2026-09-28 合并页改造）：统一导入输入框——支持直接
 粘贴序列文本（FASTA 或裸序列），也支持把 FASTA 文件拖入框内；四按钮
-BLAST/Browse/Clear/STOP，点 BLAST 自动导入框内文本并启动在线 BLAST 队列。
+BLAST/Browse/Example/Clear/STOP，点 BLAST 自动导入框内文本并启动在线 BLAST 队列，
+Example 把内置 demo/example.fasta 载入框内供试跑。
 source 修饰符不在本页采集——BankIt 门户模式下由门户表单录入（§7.2 P5）。"""
 import io
 import os
+from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QTextCursor
-from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog,
-                             QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
-                             QProgressBar, QPushButton, QVBoxLayout, QWidget)
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent, QTextCursor
+from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QDialogButtonBox,
+                             QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+                             QMessageBox, QPlainTextEdit, QProgressBar,
+                             QPushButton, QTableWidget, QTableWidgetItem,
+                             QToolButton, QVBoxLayout, QWidget)
 
 from ...core.models import SeqInput
-from ..icons import icon
-from ..widgets.help import HelpButton
+from ..widgets.help import MARKER_HINT
 
 # 裸序列允许的字符（IUPAC 核苷酸歧义码）
 _DNA_CHARS = set("ACGTUNRYKMSWBDHV")
@@ -161,44 +164,75 @@ class PageImport(QWidget):
         layout.addLayout(header)
 
         self.import_box = ImportBox()
-        self.import_box.setMinimumHeight(120)
+        self.import_box.setMinimumHeight(110)
         self.import_box.errorRaised.connect(
             lambda msg: QMessageBox.warning(self, "Import failed", msg))
         layout.addWidget(self.import_box, 1)
 
         row = QHBoxLayout()
-        self.b_blast = QPushButton(icon("fa5s.play", "#ffffff"), "BLAST")
+        self.b_blast = QPushButton("BLAST")
         self.b_blast.setObjectName("PrimaryButton")
         self.b_blast.setToolTip("Import the box content (if any) and start online BLAST")
         self.b_blast.clicked.connect(self._start)
-        b_browse = QPushButton(icon("fa5s.folder-open", "#57606a"), "Browse")
+        b_browse = QPushButton("Browse")
         b_browse.setToolTip("Pick FASTA files and load them into the box")
         b_browse.clicked.connect(self._add_files_dialog)
-        b_clear = QPushButton(icon("fa5s.broom", "#57606a"), "Clear")
+        b_example = QPushButton("Example")
+        b_example.setToolTip("Load the bundled example FASTA (demo/example.fasta, 4 "
+                             "Colletotrichum marker sequences) into the box, then click BLAST")
+        b_example.clicked.connect(self._load_example)
+        b_clear = QPushButton("Clear")
         b_clear.setToolTip("Remove all imported sequences")
         b_clear.clicked.connect(self._clear)
         self.b_stop = QPushButton("STOP")
         self.b_stop.clicked.connect(self._cancel)
         self.b_stop.setEnabled(False)
+        row_buttons = (self.b_blast, b_browse, b_example, b_clear, self.b_stop)
+        uniform = max(b.sizeHint().width() for b in row_buttons)
+        for b in row_buttons:           # 五按钮统一宽度（取最宽者的自然宽度）
+            b.setFixedWidth(uniform)
         row.addWidget(self.b_blast)
         row.addWidget(b_browse)
+        row.addWidget(b_example)
         row.addWidget(b_clear)
         row.addWidget(self.b_stop)
         row.addStretch(1)
         layout.addLayout(row)
 
+        # ---- 已导入序列清单：BLAST 状态 / 单条删除 / 双击 Seq ID 改名 ----
+        self.seq_table = QTableWidget(0, 5)
+        self.seq_table.setHorizontalHeaderLabels(
+            ["Seq ID", "Length (bp)", "Marker", "BLAST", ""])
+        self.seq_table.verticalHeader().setVisible(False)
+        self.seq_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.seq_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.seq_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.SelectedClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed)
+        self.seq_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch)
+        self.seq_table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.seq_table.setColumnWidth(1, 90)
+        self.seq_table.setColumnWidth(2, 90)
+        self.seq_table.setColumnWidth(3, 90)
+        self.seq_table.setColumnWidth(4, 34)
+        self.seq_table.setMinimumHeight(110)
+        self.seq_table.itemChanged.connect(self._on_seq_item_changed)
+        layout.addWidget(self.seq_table, 1)
+
         # ---- 状态提示（BLAST 区）----
-        hint_row = QHBoxLayout()
         self.lbl_hint = QLabel("")
         self.lbl_hint.setObjectName("Hint")
         self.lbl_hint.setWordWrap(True)
-        hint_row.addWidget(self.lbl_hint, 1)
-        hint_row.addWidget(HelpButton("identity"))
-        layout.addLayout(hint_row)
+        layout.addWidget(self.lbl_hint)
 
         self.progress = QProgressBar()
         layout.addWidget(self.progress)
 
+        self._loading_table = False     # 重建清单期间抑制 itemChanged 联动
+        self._seq_sig: list = []        # 清单内容签名，未变化时不重建
         self.import_box.textChanged.connect(self.refresh)
         self.refresh()
 
@@ -209,11 +243,32 @@ class PageImport(QWidget):
         if paths:
             self.import_box.load_paths(paths)
 
+    def _load_example(self):
+        """把仓库自带 demo/example.fasta 载入输入框（追加，与 Browse 同通道）。
+
+        状态栏报出文件内的序列条数——此时序列尚未导入项目（右栏摘要仍显示
+        no sequences），故消息里明确"点 BLAST 运行"，避免两种状态混淆。"""
+        path = Path(__file__).resolve().parents[3] / "demo" / "example.fasta"
+        if not path.is_file():
+            QMessageBox.information(
+                self, "Example not found",
+                f"The bundled example file is missing:\n{path}")
+            return
+        text = path.read_text(encoding="utf-8", errors="replace")
+        try:
+            n = len(parse_pasted_input(text))
+        except ValueError:
+            n = 0
+        self.import_box.load_paths([str(path)])
+        self.win.log(f"Example loaded into the box: {n} sequence(s) from "
+                     f"{path.name} - click BLAST to run")
+
     # ---- 刷新 ----
     def refresh(self):
-        """页眉计数 + BLAST 区状态（提示、BLAST 禁用条件）。"""
+        """页眉计数 + 序列清单 + BLAST 区状态（提示、BLAST 禁用条件）。"""
         n = len(self.win.sequences)
         self.lbl_count.setText(f"{n} sequence(s) imported" if n else "")
+        self._refresh_seq_table()
 
         email_ok = bool(self.win.make_config().email)
         has_input = bool(self.import_box.toPlainText().strip())
@@ -231,6 +286,99 @@ class PageImport(QWidget):
         self.lbl_hint.setText(reason + "Online BLAST takes ~1-5 min per sequence "
                                        "(serial, rate-limited queue).")
 
+    # ---- 序列清单 ----
+    def _refresh_seq_table(self):
+        """重建清单（ID/长度/Marker/BLAST 状态/删除）；签名未变则跳过。"""
+        self.seq_table.setVisible(bool(self.win.sequences))
+        running = self.win._blast_running
+        sig = [(s.seq_id, len(s.seq), s.gene_type or "auto-detect",
+                "done" if s.seq_id in self.win.hits
+                else "running…" if s.seq_id in running else "-")
+               for s in self.win.sequences]
+        if sig == self._seq_sig:
+            return
+        self._seq_sig = sig
+        self._loading_table = True
+        self.seq_table.setRowCount(0)
+        for row, s in enumerate(self.win.sequences):
+            self.seq_table.insertRow(row)
+            id_item = QTableWidgetItem(s.seq_id)
+            id_item.setToolTip("Double-click to rename - hits, results and the "
+                               "confirmation state move with the new name")
+            self.seq_table.setItem(row, 0, id_item)
+            for col, value in ((1, str(len(s.seq))), (2, s.gene_type or "auto-detect")):
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if col == 2:
+                    item.setToolTip(MARKER_HINT)
+                self.seq_table.setItem(row, col, item)
+            if s.seq_id in self.win.hits:
+                st = QTableWidgetItem("done")
+                st.setForeground(QColor("#1a7f37"))
+            elif s.seq_id in running:
+                st = QTableWidgetItem("running…")
+                st.setForeground(QColor("#9a6700"))
+            else:
+                st = QTableWidgetItem("-")
+            st.setFlags(st.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.seq_table.setItem(row, 3, st)
+            btn = QToolButton()
+            btn.setText("✕")
+            btn.setToolTip(f"Remove {s.seq_id} (with its hits, results and confirmations)")
+            btn.clicked.connect(lambda _=False, sid=s.seq_id: self._remove_one(sid))
+            self.seq_table.setCellWidget(row, 4, btn)
+        self._loading_table = False
+
+    def _revert_cell(self, row: int, col: int, text: str):
+        self._loading_table = True
+        self.seq_table.item(row, col).setText(text)
+        self._loading_table = False
+
+    def _on_seq_item_changed(self, item):
+        """Seq ID 列编辑 → 全局改名（命中/结果/确认状态随新名迁移）。"""
+        if self._loading_table or item.column() != 0:
+            return
+        row = item.row()
+        if not (0 <= row < len(self.win.sequences)):
+            return
+        old = self.win.sequences[row].seq_id
+        new = item.text().strip()
+        if new == old:
+            return
+        if not new:
+            QMessageBox.warning(self, "Invalid Seq ID", "Seq ID cannot be empty.")
+            self._revert_cell(row, 0, old)
+            return
+        if any(x.seq_id == new for x in self.win.sequences):
+            QMessageBox.warning(self, "Duplicate Seq ID", f"'{new}' already exists.")
+            self._revert_cell(row, 0, old)
+            return
+        self.win.rename_sequence(old, new)
+        self.win.log(f"[{old}] renamed to {new}")
+        self.refresh()
+
+    def _remove_one(self, sid: str):
+        self.win.remove_sequence(sid)
+        self.win._refresh_nav()
+        self.refresh()
+
+    def _dedupe_ids(self, seqs: list) -> None:
+        """入库前整体查重：全部通过才清空输入框（避免半提交丢内容）。
+
+        自动命名的 pasted_seq 冲突时追加序号（pasted_seq_2、…_3），
+        用户命名的重复仍视为错误。"""
+        existing = {s.seq_id for s in self.win.sequences}
+        seen: set[str] = set()
+        for s in seqs:
+            if s.seq_id in existing or s.seq_id in seen:
+                if not (s.seq_id == "pasted_seq" or s.seq_id.startswith("pasted_seq_")):
+                    raise ValueError(f"Duplicate Seq ID: {s.seq_id}")
+                n = 2
+                while f"pasted_seq_{n}" in existing or f"pasted_seq_{n}" in seen:
+                    n += 1
+                s.seq_id = f"pasted_seq_{n}"
+            seen.add(s.seq_id)
+
     # ---- BLAST 任务（点击即自动导入框内文本并启动）----
     def _start(self):
         if not self.b_blast.isEnabled():
@@ -238,11 +386,12 @@ class PageImport(QWidget):
         if self.import_box.toPlainText().strip():
             try:
                 seqs = parse_pasted_input(self.import_box.toPlainText())
-                for s in seqs:
-                    self.win.add_sequence(s)
+                self._dedupe_ids(seqs)
             except ValueError as ex:
                 QMessageBox.warning(self, "Invalid input", str(ex))
-                return
+                return          # 输入框保留原文，改名/修正后重试
+            for s in seqs:
+                self.win.add_sequence(s)
             self.import_box.clear()         # textChanged → refresh
         # 先置按钮状态再提交：队列可能同步排空（全部已有 hits），
         # 由 on_queue_finished 的刷新决定最终态（见 ledger ruling）
