@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
 
-from PyQt6.QtWidgets import QPlainTextEdit
+from PyQt6.QtWidgets import QLabel, QPlainTextEdit
 
 
 @pytest.fixture
@@ -63,14 +63,15 @@ def test_icon_toolbar_replaced_by_menu_bar(window):
 
 
 def test_log_dock_removed_status_bar_summarises(window):
-    """去掉日志坞：消息落到状态栏，右侧摘要给出步骤/序列/参考/注释/导出。"""
+    """去掉日志坞：消息落到状态栏左侧，右侧仅一个单格摘要（序列数/基因型 + 注释告警）。"""
     from PyQt6.QtWidgets import QDockWidget
 
     assert window.findChildren(QDockWidget) == []            # 无日志坞
-    assert window.status_step.text() == "Step 1/5 · 1. Import"
-    assert window.status_seq.text() == "0 sequence(s)"
-    assert window.status_ann.text() == "no sequences yet"
-    assert window.status_out.text() == "not exported"
+    # 右侧常驻摘要只有 1 格（原 Step/序列/参考/注释/导出 5 格已合并/移除）
+    summary = [w for w in window.statusBar().findChildren(QLabel)
+               if w.objectName() == "StatusAlerts"]
+    assert len(summary) == 1 and summary[0] is window.status_summary
+    assert window.status_summary.text() == "no sequences"
 
     window.log("hello status bar")                            # 原 log() 通道
     assert window.statusBar().currentMessage() == "hello status bar"
@@ -79,9 +80,7 @@ def test_log_dock_removed_status_bar_summarises(window):
     window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 30, gene_type="tef1"))
     window.exported = True
     window.update_summary()
-    assert window.status_seq.text() == "1 sequence(s) · tef1"
-    assert window.status_ann.text() == "annotated 0/1"
-    assert window.status_out.text() == "✓ exported"
+    assert window.status_summary.text() == "1 sequence(s) · tef1"   # 未注释，无 ann 段
 
 
 def test_step_nav_states_and_locking(window):

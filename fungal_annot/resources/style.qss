@@ -111,16 +111,14 @@ QPlainTextEdit#ImportBox[dragOver="true"] {
     border-color: #2D7DD2; background: #eaf2fc;
 }
 
-/* ---- 状态栏（唯一反馈通道：左消息 + 右摘要） ---- */
+/* ---- 状态栏（唯一反馈通道：左消息 + 右单格摘要） ---- */
 QPlainTextEdit#MonoViewer { font-family: Consolas, "Courier New", monospace; font-size: 10pt; }
 QStatusBar { background: #f6f8fa; border-top: 1px solid #e1e4e8; color: #57606a; }
 QStatusBar::item { border: none; }
 QStatusBar QLabel { color: #57606a; padding: 0 2px; }
-QLabel#StatusSep { color: #d0d7de; }
 QLabel#StatusAlerts[level="ok"] { color: #1a7f37; }
 QLabel#StatusAlerts[level="warn"] { color: #9a6700; font-weight: 600; }
 QLabel#StatusAlerts[level="error"] { color: #cf222e; font-weight: 600; }
-QLabel#StatusOut[level="done"] { color: #1a7f37; font-weight: 600; }
 
 /* ---- 菜单栏 ---- */
 QMenuBar { background: #ffffff; border-bottom: 1px solid #e1e4e8; padding: 2px 6px; }

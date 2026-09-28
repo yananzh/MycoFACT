@@ -1,5 +1,6 @@
 """主窗口（§7.1）：顶部水平步骤条 + 中央五页向导 + 底部状态栏；项目存取与设置走菜单栏。
-消息与摘要都收敛到状态栏（左侧最近消息 + 右侧步骤/序列/参考/注释/导出摘要）。
+消息与摘要都收敛到状态栏（左侧最近消息 + 右侧单格摘要：序列数/基因型 + 注释进度与告警；
+步骤与导出进度由顶部步骤条表达，参考信息在对应页面内展示）。
 
 状态中枢：sequences / hits / selected_ref / results / confirmed 由本对象持有，
 各页面通过 win 引用读写。BLAST 队列串行（限速），注释队列小并发。
@@ -25,13 +26,6 @@ from .pages.page_import import PageImport
 from .pages.page_reference import PageReference
 from .pages.page_review import PageReview
 from .widgets.step_bar import StepBar
-
-
-def _status_separator() -> QLabel:
-    """状态栏字段之间的浅色竖线。"""
-    sep = QLabel("\u2502")
-    sep.setObjectName("StatusSep")
-    return sep
 
 
 class SettingsDialog(QDialog):
@@ -152,21 +146,10 @@ class MainWindow(QMainWindow):
         m_file.addAction("Exit", self.close).setShortcut("Ctrl+Q")
         bar.addMenu("&Tools").addAction("Settings...", self._open_settings)
 
-        # ---- 状态栏：左侧最近消息 + 右侧常驻摘要 ----
-        sb = self.statusBar()
-        self.status_step = QLabel()
-        self.status_seq = QLabel()
-        self.status_ref = QLabel()
-        self.status_ann = QLabel()
-        self.status_ann.setObjectName("StatusAlerts")
-        self.status_out = QLabel()
-        self.status_out.setObjectName("StatusOut")
-        for label in (self.status_step, self.status_seq, self.status_ref):
-            sb.addPermanentWidget(label)
-            sb.addPermanentWidget(_status_separator())
-        sb.addPermanentWidget(self.status_ann)
-        sb.addPermanentWidget(_status_separator())
-        sb.addPermanentWidget(self.status_out)
+        # ---- 状态栏：左侧最近消息 + 右侧单格常驻摘要 ----
+        self.status_summary = QLabel()
+        self.status_summary.setObjectName("StatusAlerts")
+        self.statusBar().addPermanentWidget(self.status_summary)
         self.update_summary()
 
         # ---- 记住窗口几何 ----
@@ -245,46 +228,41 @@ class MainWindow(QMainWindow):
         self.update_summary()
 
     def update_summary(self):
-        """状态栏常驻摘要：当前步骤 / 序列 / 参考 / 注释与告警 / 导出。"""
-        idx = self.stack.currentIndex()
-        self.status_step.setText("Step %d/5 \u00b7 %s" % (
-            idx + 1, self.nav.item(idx).data(Qt.ItemDataRole.UserRole)))
+        """状态栏右侧单格摘要：序列数/基因型 + 注释进度与告警（彩色级别）。"""
+        n = len(self.sequences)
+        if not n:
+            self.status_summary.setText("no sequences")
+            self._set_status_level(self.status_summary, "")
+            return
 
         genes = {s.gene_type for s in self.sequences if getattr(s, "gene_type", "")}
-        seq_text = f"{len(self.sequences)} sequence(s)"
+        text = f"{n} sequence(s)"
         if len(genes) == 1:
-            seq_text += f" \u00b7 {genes.pop()}"
+            text += f" \u00b7 {genes.pop()}"
         elif len(genes) > 1:
-            seq_text += f" \u00b7 {len(genes)} gene types"
-        self.status_seq.setText(seq_text)
+            text += f" \u00b7 {len(genes)} gene types"
 
-        if self.local_ref_text is not None:
-            self.status_ref.setText(f"offline \u00b7 {self.local_ref_name}")
-        else:
-            chosen = sum(1 for v in self.selected_ref.values() if v)
-            self.status_ref.setText(
-                f"{len(self.hits)} BLAST result(s) \u00b7 {chosen} ref chosen")
-
-        n, ann = len(self.sequences), len(self.results)
+        ann = len(self.results)
         warn = sum(1 for r in self.results.values()
                    if getattr(r, "status", "red") == "yellow")
         red = [sid for sid, r in self.results.items()
                if getattr(r, "status", "red") == "red"]
         open_red = sum(1 for sid in red if not self.confirmed.get(sid))
-        parts = [f"annotated {ann}/{n}" if n else "no sequences yet"]
-        if warn:
-            parts.append(f"{warn} warn")
-        if red:
-            parts.append(f"{len(red)} red"
-                         + (f" ({open_red} unconfirmed)" if open_red else ""))
-        if ann and not warn and not red:
-            parts.append("all clear")
-        self.status_ann.setText(" \u00b7 ".join(parts))
-        self._set_status_level(self.status_ann,
-                               "error" if red else "warn" if warn else "ok")
+        if ann:
+            parts = [f"annotated {ann}/{n}"]
+            if warn:
+                parts.append(f"{warn} warn")
+            if red:
+                parts.append(f"{len(red)} red"
+                             + (f" ({open_red} unconfirmed)" if open_red else ""))
+            if not warn and not red:
+                parts.append("all clear")
+            text += " \u00b7 " + " \u00b7 ".join(parts)
 
-        self.status_out.setText("\u2713 exported" if self.exported else "not exported")
-        self._set_status_level(self.status_out, "done" if self.exported else "todo")
+        self.status_summary.setText(text)
+        self._set_status_level(self.status_summary,
+                               "error" if red else "warn" if warn
+                               else "ok" if ann else "")
 
     @staticmethod
     def _set_status_level(label: QLabel, level: str):
