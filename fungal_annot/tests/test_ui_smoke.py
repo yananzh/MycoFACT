@@ -141,6 +141,54 @@ def test_blast_failure_drain_jumps(window):
     assert not window.page_import.b_cancel.isEnabled()
 
 
+def test_blast_success_drain_jumps(window):
+    """worker 正常完成（最常见路径）：命中落盘 → 排空 → 跳 Reference。"""
+    from fungal_annot.core.blast_runner import BlastHit
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
+    window.page_import.progress.setMaximum(1)
+    window._blast_pending = 1
+    hit = BlastHit(accession="AA000001", title="hit", pident=99.0,
+                   qcovs=100.0, subject_len=100, flags={})
+    window._on_worker_finished("s1", [hit])
+    assert window._blast_pending == 0
+    assert window.hits["s1"] == [hit]
+    assert window.stack.currentIndex() == 1
+    assert not window.page_import.b_cancel.isEnabled()
+
+
+def test_blast_finish_after_discard_stays_put(window):
+    """项目被丢弃后 worker 完成：不写陈旧命中、不强制跳 Reference。"""
+    from fungal_annot.core.blast_runner import BlastHit
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
+    window.page_import.progress.setMaximum(1)
+    window._blast_pending = 1
+    window.sequences.clear()               # 模拟运行中 New/Clear（绕过 QMessageBox）
+    window._on_worker_finished("s1", [BlastHit(accession="AA000001", title="hit",
+                                               pident=99.0, qcovs=100.0,
+                                               subject_len=100, flags={})])
+    assert window._blast_pending == 0
+    assert "s1" not in window.hits
+    assert window.stack.currentIndex() == 0
+
+
+def test_start_blast_disabled_while_queue_running(window):
+    """队列运行中 refresh() 不得把 Start 重新点亮（防双重提交）。"""
+    from fungal_annot.core.models import SeqInput
+
+    window.settings["email"] = "a@example.org"
+    window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
+    window._blast_pending = 1
+    window.page_import.refresh()
+    assert not window.page_import.b_start.isEnabled()
+    window._blast_pending = 0
+    window.page_import.refresh()
+    assert window.page_import.b_start.isEnabled()
+
+
 def test_import_and_remove(window):
     from fungal_annot.core.models import SeqInput
     window.add_sequence(SeqInput(seq_id="t1", seq="ACGT" * 25, gene_type="tef1"))

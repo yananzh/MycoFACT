@@ -1,4 +1,4 @@
-"""主窗口（§7.1）：顶部水平步骤条 + 中央五页向导 + 底部状态栏；项目存取与设置走菜单栏。
+"""主窗口（§7.1）：顶部水平步骤条 + 中央四页向导 + 底部状态栏；项目存取与设置走菜单栏。
 消息与摘要都收敛到状态栏（左侧最近消息 + 右侧单格摘要：序列数/基因型 + 注释进度与告警；
 步骤与导出进度由顶部步骤条表达，参考信息在对应页面内展示）。
 
@@ -342,7 +342,8 @@ class MainWindow(QMainWindow):
         if self._blast_pending == 0:
             self.log("All sequences already have BLAST hits - continue to reference selection.")
             self.page_import.on_queue_finished()
-            self.go_page(1)
+            if self.sequences:
+                self.go_page(1)
         else:
             self.page_import.progress.setMaximum(self._blast_pending)
             self.page_import.progress.setValue(0)
@@ -383,14 +384,15 @@ class MainWindow(QMainWindow):
         from ..services.pipeline import SeqResult
         self.update_summary()
         if isinstance(payload, list):
-            self.hits[seq_id] = payload
+            if any(s.seq_id == seq_id for s in self.sequences):
+                self.hits[seq_id] = payload   # 序列已被丢弃则不落陈旧命中
             self._blast_pending -= 1
             self.page_import.progress.setValue(
                 self.page_import.progress.maximum() - self._blast_pending)
             if self._blast_pending <= 0:
                 self.page_import.on_queue_finished()
-                self.go_page(1)             # BLAST 排空 → 自动进入参考选择
-                self.page_reference.refresh()
+                if self.sequences:            # 项目已丢弃则不再强制跳转
+                    self.go_page(1)           # BLAST 排空 → 自动进入参考选择
         elif isinstance(payload, SeqResult):
             self.results[seq_id] = payload
             self._annotate_pending -= 1

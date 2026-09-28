@@ -1,6 +1,6 @@
 """顶部水平步骤条（Phase 2 步骤检查条）。
 
-五个步骤等宽平铺于窗口顶部；点击已解锁的步骤切换页面，点在锁定的步骤上
+四个步骤等宽平铺于窗口顶部；点击已解锁的步骤切换页面，点在锁定的步骤上
 只记录原因不切换（步骤状态由主窗口给出）。
 
 步骤块的底色/字色由主窗口写入 item 的 Background/Foreground/Font 角色，这里
@@ -78,7 +78,7 @@ class StepBar(QListWidget):
         self._uniform_slots()
 
     def _uniform_slots(self):
-        """五步平分宽度：改写每个 item 的 sizeHint（ListMode 下 item 宽度取自它），
+        """四步平分宽度：改写每个 item 的 sizeHint（ListMode 下 item 宽度取自它），
         窗口缩放时同步，长标题由委托省略号截断。"""
         count = self.count()
         if count == 0:

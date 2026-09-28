@@ -28,7 +28,7 @@ HINTS = {
                             "cover the whole gene. No action needed.",
     "exon_map_fail": "A reference exon has no counterpart in your sequence (indel/gap). "
                      "Review the affected segment manually.",
-    "low_identity": "The reference may be too distant - pick a closer one in step 3, "
+    "low_identity": "The reference may be too distant - pick a closer one in step 2, "
                     "or accept it knowingly.",
     "modifier_missing": "Fill the missing source qualifiers on the Import page "
                         "(batch apply) or edit the source row here.",
@@ -264,7 +264,7 @@ class PageReview(QWidget):
         if res is None or res.detail is None:
             QMessageBox.warning(self, "Cannot re-validate",
                                 "The current result lacks alignment context (loaded from a "
-                                "project file). Re-annotate in step 3 first.")
+                                "project file). Re-annotate in step 2 first.")
             return
         s = next((x for x in self.win.sequences if x.seq_id == sid), None)
         if s is None:
@@ -332,7 +332,7 @@ class PageReview(QWidget):
         if text is None:
             QMessageBox.information(self, "No reference features",
                                     "The current result lacks alignment context (loaded from "
-                                    "a project file). Re-annotate in step 3 first.")
+                                    "a project file). Re-annotate in step 2 first.")
             return
         acc = self.win.results[self.current].provenance.reference or "reference"
         dlg = AlignmentDialog(f"Reference features - {acc}", text, self)

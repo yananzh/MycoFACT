@@ -259,10 +259,12 @@ class PageImport(QWidget):
         email_ok = bool(cfg.email)
         reason = ""
         if not n:
-            reason = "Import FASTA files in step 1 first. "
+            reason = "Import FASTA files first. "
+        elif self.win._blast_pending > 0:
+            reason = "BLAST queue is running - wait for it to finish. "
         elif not email_ok:
             reason = "Set your NCBI contact email in Tools ▸ Settings first. "
-        self.b_start.setEnabled(n > 0 and email_ok)
+        self.b_start.setEnabled(n > 0 and email_ok and self.win._blast_pending == 0)
         self.b_start.setToolTip("" if self.b_start.isEnabled()
                                 else reason.strip() or "not ready")
         self.lbl_hint.setText(reason + "Online BLAST takes ~1-5 min per sequence "
