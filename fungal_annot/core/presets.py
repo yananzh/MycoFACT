@@ -5,10 +5,11 @@ Candida 类核基因（12 号表）由参考 qualifier / 用户覆盖决定，�
 feature_transfer.resolve_transl_table。
 """
 import json
-import os
 from dataclasses import dataclass, field
 
-_PRESETS_PATH = os.path.join(os.path.dirname(__file__), "..", "resources", "presets.json")
+from ..paths import resource_path
+
+_PRESETS_PATH = resource_path("fungal_annot", "resources", "presets.json")
 
 
 @dataclass

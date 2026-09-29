@@ -3,8 +3,9 @@
 - `python main.py` → 启动 PyQt6 图形界面（M3–M5）
 - `python main.py run|presets …` → CLI（M1–M2，见 fungal_annot/cli.py）
 """
-import os
 import sys
+
+from fungal_annot.paths import resource_path
 
 
 def main() -> int:
@@ -17,8 +18,7 @@ def main() -> int:
     from fungal_annot.ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
-    qss = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "fungal_annot", "resources", "style.qss")
+    qss = resource_path("fungal_annot", "resources", "style.qss")
     if os.path.isfile(qss):
         with open(qss, encoding="utf-8") as fh:
             app.setStyleSheet(fh.read())

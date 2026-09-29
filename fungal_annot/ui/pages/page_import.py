@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QDialogButtonBox,
                              QToolButton, QVBoxLayout, QWidget)
 
 from ...core.models import SeqInput
+from ...paths import resource_path
 from ..widgets.help import MARKER_HINT, show_page_help
 
 # 裸序列允许的字符（IUPAC 核苷酸歧义码）
@@ -245,7 +246,7 @@ class PageImport(QWidget):
 
         状态栏报出文件内的序列条数——此时序列尚未导入项目（右栏摘要仍显示
         no sequences），故消息里明确"点 BLAST 运行"，避免两种状态混淆。"""
-        path = Path(__file__).resolve().parents[3] / "demo" / "example.fasta"
+        path = Path(resource_path("demo", "example.fasta"))
         if not path.is_file():
             QMessageBox.information(
                 self, "Example not found",
