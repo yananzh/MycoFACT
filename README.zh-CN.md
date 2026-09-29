@@ -1,56 +1,46 @@
 <div align="right">
 
-[简体中文](./README.md) | English
+[English](./README.md) | 简体中文
 
 </div>
 
-# MycoFACT — Automatic Feature Table Generation for Fungal Multi-locus Identification Sequences
+# MycoFACT — 真菌多基因鉴定序列 Feature Table 自动生成工具
 
 [![CI](https://github.com/yananzh/MycoFACT/actions/workflows/ci.yml/badge.svg)](https://github.com/yananzh/MycoFACT/actions/workflows/ci.yml)
 [![Build](https://github.com/yananzh/MycoFACT/actions/workflows/build.yml/badge.svg)](https://github.com/yananzh/MycoFACT/actions/workflows/build.yml)
 
-**MycoFACT** (**F**ungal **F**eature **A**nnotation & **C**omparison **T**ool, package
-`fungal_annot`) uses "reference annotation transfer" to automatically generate NCBI
-five-column feature tables (.tbl) for fungal marker gene sequences (LSU/SSU/tef1/rpb1/rpb2/
-tub2/act/cal and mitochondrial markers), together with the paired .fsa files and a
-validation report required for BankIt submission.
+**MycoFACT**（**F**ungal **F**eature **A**nnotation & **C**omparison **T**ool，包名
+`fungal_annot`）通过"参考注释迁移"为真菌 marker 基因序列（LSU/SSU/tef1/rpb1/rpb2/tub2/act/cal
+及线粒体 marker）自动生成 NCBI 五列 feature table（.tbl），并配套输出 BankIt 提交所需的
+.fsa 文件与验证报告。
 
-## ✨ Features
+## ✨ 功能特性
 
-- **Reference annotation transfer**: after a reference sequence is selected via BLAST, the
-  annotations of the reference GenBank record are transferred to the query sequences along
-  the alignment coordinates, producing a five-column feature table (.tbl) in BankIt portal
-  format (features such as gene/CDS only; organism info is entered in the BankIt portal form).
-- **Multi-gene presets**: built-in presets for LSU, SSU, tef1, rpb1, rpb2, tub2, act, cal
-  and mitochondrial markers; the gene type is auto-detected from BLAST hit titles or the
-  reference annotation, falling back to a generic preset when unrecognized.
-- **Three ways to specify the reference**: online BLAST (requires network; NCBI requires an
-  email address), offline mode with a local reference GenBank file, or direct accession
-  input to skip BLAST.
-- **Four-step wizard GUI**: Import & BLAST → Reference Selection → Annotation Review →
-  Validation & Export; a horizontal step bar at the top of the window lets you jump to any
-  unlocked step.
-- **Instant revalidation of edits**: the feature table is editable, and every edit is
-  revalidated immediately; a comparison view assists manual review, and red-flagged items
-  must be manually acknowledged before export.
-- **Project save / resume**: save/open projects (JSON) from the File menu, and close and
-  resume work at any time.
-- **Background thread queue**: BLAST and parsing run in background threads, keeping the UI
-  responsive.
+- **参考注释迁移**：BLAST 选定参考序列后，将参考 GenBank 的注释按比对坐标迁移到查询序列，
+  自动生成 BankIt 门户格式的五列 feature table（.tbl，只含 gene/CDS 等 feature，
+  organism 在 BankIt 门户表单录入）。
+- **多基因预设**：内置 LSU、SSU、tef1、rpb1、rpb2、tub2、act、cal 及线粒体 marker 等基因预设；
+  可自动从命中标题 / 参考注释识别基因类型，无法识别时回退通用 Generic 预设。
+- **三种指定参考的方式**：在线 BLAST 选参考（需联网，NCBI 要求提供 email）、本地参考
+  GenBank 离线模式、直接指定 accession 跳过 BLAST。
+- **四步向导 GUI**：导入 & BLAST → 参考选择 → 注释审核 → 验证导出；水平步骤条置于窗口
+  顶部，点击已解锁的步骤即可跳转。
+- **审核编辑即时重验**：feature 表格可编辑，修改后即时重验；比对视图辅助人工核查，
+  红灯项需人工确认方可导出。
+- **项目保存 / 恢复**：菜单栏 File 可保存 / 打开项目（JSON），随时关闭续作。
+- **后台线程队列**：BLAST 与解析在后台线程执行，界面保持响应。
 
-## 📌 Status
+## 📌 当前状态
 
-- **M0–M2 completed**: all core/ layer modules + CLI + tests (milestones M0–M2, §8 of the
-  design plan).
-- **M3–M5 completed**: PyQt6 four-page wizard UI, background thread queue, project JSON
-  persistence, instant revalidation of review edits, in-app table2asn preflight entry.
-- **To do**: online BLAST validation against the live NCBI service (a gold-standard set of
-  real lab sequences is recommended per plan M2), a table2asn CI gate (requires a BankIt
-  template .sbt), and Windows code signing / macOS notarization.
+- **M0–M2 已完成**：core/ 核心层全部模块 + CLI + 测试（计划 §8 里程碑 M0–M2）。
+- **M3–M5 已完成**：PyQt6 四页向导 UI、后台线程队列、项目 JSON 存取、审核编辑即时重验、
+  table2asn 应用内预检入口。
+- **待办**：在线 BLAST 对 NCBI 实网验证（建议按计划 M2 用实验室真实序列做黄金集）、
+  table2asn CI 门禁（需 BankIt 模板 .sbt）、Windows 代码签名与 macOS 公证。
 
-## 📦 Installation
+## 📦 安装
 
-Requires Python ≥ 3.10 (CI runs on 3.12, covering Windows / macOS / Linux).
+需要 Python ≥ 3.10（CI 在 3.12 上测试，覆盖 Windows / macOS / Linux）。
 
 ```bash
 git clone https://github.com/yananzh/MycoFACT.git
@@ -58,80 +48,73 @@ cd MycoFACT
 pip install -r requirements.txt
 ```
 
-Ready-to-run builds: the `Build` workflow packages the app with PyInstaller
-(--onedir) on every push and on `v*` tags, producing Windows zip / macOS .app zip
-/ Linux tar.gz. Pushing a tag (e.g. `v0.1.0`) attaches them to a GitHub Release.
-Binaries are currently unsigned: Windows SmartScreen shows a warning on first
-launch ("More info" → "Run anyway"); on macOS, right-click → Open on first start.
+免安装的打包版：`Build` workflow 用 PyInstaller（--onedir）在每次 push 与
+`v*` tag 时产出三平台包（Windows zip / macOS .app zip / Linux tar.gz），
+打 tag（如 `v0.1.0`）会自动附到 GitHub Releases。当前未签名：Windows
+首次运行 SmartScreen 会告警（点"仍要运行"），macOS 首启需右键 → 打开。
 
-## 🖥 Graphical Interface
+## 🖥 图形界面
 
 ```bash
-python main.py        # launch the GUI
+python main.py        # 启动 GUI
 ```
 
-Four steps: import sequences and run BLAST (drag & drop / browse / paste FASTA or bare
-sequences, or click **Example** to load the built-in demo demo/example.fasta; the wizard
-advances automatically once the queue is drained) → reference selection (in-row single
-choice in the hit table, recommended row pre-selected) → annotation review (editable
-feature table, instant revalidation, alignment view, manual acknowledgment of red-flagged
-items) → validation summary and export (.tbl + .fsa + report).
+四步流程：序列导入并跑 BLAST（拖入 / 浏览 / 粘贴 FASTA 或裸序列，或点 **Example** 载入
+内置示例 demo/example.fasta；队列排空后自动进入下一步）→ 参考选择（命中表行内单选，
+默认推荐行）→ 注释审核（可编辑 feature 表格、即时重验、比对视图、红灯人工
+确认）→ 验证汇总与导出（.tbl + .fsa + 报告）。
 
-References are always resolved online (hit accession / direct download); the offline local
-GenBank mode remains available only via the CLI `--ref-gb` option.
+参考统一在线解析（命中 accession / 直接下载）；本地参考 GenBank 离线模式仅 CLI
+`--ref-gb` 保留。
 
-## ⌨️ Quick Start (CLI)
+## ⌨️ 快速上手（CLI）
 
 ```bash
-# One-shot demo: generates a reference GenBank file + two queries (forward strand with an
-# insertion / reverse complement) and runs the pipeline end-to-end offline
+# 一键演示：生成参考 GB + 两条查询（正链带插入 / 反向互补），离线跑通端到端
 python scripts/make_demo.py
 python main.py run --input demo/tef1_queries.fasta --out demo_out --gene-type tef1 \
     --ref-gb demo/reference.gb
 
-# Offline mode: use a local reference GenBank file (testing / no-network environments)
+# 离线模式：用本地参考 GenBank 文件（测试 / 无网络环境）
 python main.py run --input seqs.fasta --out outdir --gene-type tef1 --ref-gb reference.gb
-# When --gene-type is omitted it is auto-detected from hit titles / the reference
-# annotation; falls back to the generic preset if unrecognized
+# 省略 --gene-type 时自动从命中标题 / 参考注释判定；无法识别则用 Generic 通用预设
 
-# Online mode: pick the reference via BLAST (requires network; email is required by NCBI)
+# 在线模式：BLAST 选参考（需要网络；email 为 NCBI 要求）
 python main.py run --input seqs.fasta --out outdir --gene-type tef1 --email you@example.org
 
-# Specify the reference accession directly (skips BLAST)
+# 直接指定参考 accession（跳过 BLAST）
 python main.py run --input seqs.fasta --out outdir --gene-type tef1 --accession LCxxxxxx.1
 
-# List all gene presets
+# 查看全部基因预设
 python main.py presets
 ```
 
-## 📤 Output
+## 📤 输出
 
-- One `<SeqID>.tbl` (feature table) + one paired `<SeqID>.fsa` per sequence
-- Overall validation report `validation_report.csv`
+- 每条序列一个 `<SeqID>.tbl`（feature table）+ 配对 `<SeqID>.fsa`
+- 总体验证报告 `validation_report.csv`
 
-## ✅ Running Tests
+## ✅ 运行测试
 
 ```bash
 pytest
 ```
 
-## 📁 Project Structure
+## 📁 项目结构
 
 ```text
 MycoFACT/
-├── main.py                # Entry point: python main.py → GUI; run / presets → CLI
+├── main.py                # 入口：python main.py → GUI；run / presets → CLI
 ├── fungal_annot/
-│   ├── core/              # Core layer: BLAST, reference fetching, annotation
-│   │                      #   transfer, validation, .tbl writing
-│   ├── services/          # Pipeline, background threads, project JSON persistence
-│   ├── ui/                # PyQt6 four-page wizard UI
-│   ├── resources/         # Stylesheets, icons
-│   └── tests/             # pytest tests
-├── scripts/make_demo.py   # One-shot demo data generator
-└── demo/                  # Built-in examples (query FASTA / reference GenBank)
+│   ├── core/              # 核心层：BLAST、参考获取、注释迁移、验证、.tbl 写出
+│   ├── services/          # 流水线、后台线程、项目 JSON 存取
+│   ├── ui/                # PyQt6 四页向导界面
+│   ├── resources/         # 样式表、图标
+│   └── tests/             # pytest 测试
+├── scripts/make_demo.py   # 一键生成演示数据
+└── demo/                  # 内置示例（查询 FASTA / 参考 GenBank）
 ```
 
-## 📄 Design Document
+## 📄 设计文档
 
-The detailed design is described in the Chinese-language internal document
-《真菌多基因序列FeatureTable工具-开发计划.md》(not included in this repository).
+详细设计见《真菌多基因序列FeatureTable工具-开发计划.md》（内部设计文档，暂不随仓库公开）。
