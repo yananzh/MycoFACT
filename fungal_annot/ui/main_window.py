@@ -1,51 +1,53 @@
-"""主窗口（§7.1）：顶部水平步骤条 + 中央四页向导 + 底部状态栏；项目存取与设置走菜单栏。
+"""主窗口（§7.1）：顶部水平步骤条 + 中央四页向导 + 底部状态栏；菜单栏仅
+Settings / Guide / About 三个直接动作（点击即执行，无下拉子菜单）。
 消息与摘要都收敛到状态栏（左侧最近消息 + 右侧单格摘要：序列数/基因型 + 注释进度与告警；
 步骤与导出进度由顶部步骤条表达，参考信息在对应页面内展示）。
 
-状态中枢：sequences / hits / selected_ref / results / confirmed 由本对象持有，
-各页面通过 win 引用读写。BLAST 队列串行（限速），注释队列小并发。
+状态中枢：sequences / hits / selected_refs / results / chosen_ref / confirmed 由本对象持有，
+各页面通过 win 引用读写。results[seq_id] = {参考accession → SeqResult}（多参考对比，
+2026-09-29）；BLAST 队列串行（限速），注释队列小并发、按（序列 × 参考）成对提交。
 """
 import os
 
 from PyQt6.QtCore import QSettings, QSize, Qt
-from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFileDialog,
-                             QFormLayout, QLabel, QLineEdit, QListWidgetItem,
-                             QMainWindow, QMessageBox, QStackedWidget,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
+                             QLabel, QLineEdit, QListWidgetItem, QMainWindow,
+                             QMessageBox, QStackedWidget, QVBoxLayout, QWidget)
 from PyQt6.QtGui import QColor, QGuiApplication
 
 from ..core.blast_runner import BlastHit
 from ..core.models import SeqInput
 from ..services.pipeline import PipelineConfig
-from ..services.project_store import (load_project, load_settings,
-                                      save_project, save_settings)
+from ..services.project_store import load_settings, save_settings
 from ..services.worker import AnnotateWorker, BlastWorker, TaskQueue
 from .pages.page_export import PageExport
 from .pages.page_import import PageImport
 from .pages.page_reference import PageReference
 from .pages.page_review import PageReview
+from .widgets.help import show_about, show_app_guide
 from .widgets.step_bar import StepBar
 
 
 class SettingsDialog(QDialog):
+    """设置弹窗（简化版）：只露出普通用户需要的三项——NCBI 邮箱（BLAST 必需）、
+    identity 阈值（决定红灯复核线）、每序列对比参考数；其余高级项（api_key /
+    blast_db / organism_filter / hitlist_size / cache_dir / auto_partial）不再
+    展示，由 make_config 的默认值兜底，settings.json 里已有的值保存时原样带回。"""
+
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
+        self._base = dict(settings)     # 未露出的键不因保存而丢失
         self.setWindowTitle("Settings")
-        self.resize(520, 300)
         form = QFormLayout(self)
         self.edits = {}
         fields = [("email", "NCBI contact email (required)"),
-                  ("api_key", "Entrez API key (optional)"),
-                  ("blast_db", "BLAST database (core_nt / refseq_genomic ...)"),
-                  ("organism_filter", "BLAST organism filter (optional)"),
                   ("identity_threshold", "identity threshold %"),
-                  ("hitlist_size", "Max hits"),
-                  ("cache_dir", "Cache directory (optional)"),
-                  ]
-        defaults = {"blast_db": "core_nt"}
+                  ("default_refs", "References compared per sequence (1-5)")]
+        # 与 make_config 的兜底默认值保持一致（identity_threshold 空白会被误读为未设置）
+        defaults = {"identity_threshold": "97", "default_refs": "3"}
         hints = {"email": "NCBI uses this to contact you about the submission.",
-                 "blast_db": "core_nt is the current default nucleotide database.",
-                 "identity_threshold": "Below this identity a sequence is flagged RED for manual review."}
+                 "identity_threshold": "Below this identity a sequence is "
+                                       "flagged RED for manual review."}
         for key, label in fields:
             edit = QLineEdit(str(settings.get(key) or defaults.get(key, "")))
             self.edits[key] = edit
@@ -53,26 +55,26 @@ class SettingsDialog(QDialog):
             if key in hints:
                 hint = QLabel(hints[key])
                 hint.setObjectName("Hint")
-                form.addRow("", hint)
-        self.chk_partial = QCheckBox("Auto-mark features touching sequence ends as partial (§2.1)")
-        self.chk_partial.setChecked(bool(settings.get("auto_partial", True)))
-        form.addRow(self.chk_partial)
+                hint.setWordWrap(True)      # 提示行跨两列折行，不撑宽弹窗
+                form.addRow(hint)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                               | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         form.addRow(bb)
+        # 三行表单无需大弹窗：直接贴 sizeHint（不得再手动放大）
+        self.resize(self.sizeHint())
 
     def values(self) -> dict:
-        d = {k: e.text().strip() for k, e in self.edits.items()}
-        d["auto_partial"] = self.chk_partial.isChecked()
+        d = dict(self._base)
+        d.update({k: e.text().strip() for k, e in self.edits.items()})
         return d
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Fungal Multi-locus Feature Table Generator")
+        self.setWindowTitle("MycoFACT - Fungal Feature Annotation & Comparison Tool")
         # 默认窗口大小：可用屏幕的 60%（夹在 860x560 与 1060x700 之间）；
         # 用户手动调整后由 QSettings 记忆，此默认值仅首次启动生效
         self.setMinimumSize(860, 560)
@@ -89,8 +91,11 @@ class MainWindow(QMainWindow):
         self.settings = load_settings()
         self.sequences: list[SeqInput] = []
         self.hits: dict[str, list[BlastHit]] = {}
-        self.selected_ref: dict[str, str | None] = {}
-        self.results: dict[str, object] = {}
+        # 多参考对比（2026-09-29）：每序列可选 1-5 个参考；results[seq_id] 是
+        # {参考accession → SeqResult} 的 variant 表；chosen_ref 为采纳导出的 variant
+        self.selected_refs: dict[str, list[str]] = {}
+        self.results: dict[str, dict[str, object]] = {}
+        self.chosen_ref: dict[str, str] = {}
         self.confirmed: dict[str, bool] = {}
         self._blast_running: set[str] = set()   # 已提交 BLAST、尚未返回的序列
         self.last_export_dir = os.path.join(os.path.expanduser("~"), "fungal_annot_out")
@@ -139,17 +144,16 @@ class MainWindow(QMainWindow):
         v.addWidget(self.stack, 1)
         self.setCentralWidget(central)
 
-        # ---- 菜单栏（原图标工具栏）----
+        # ---- 菜单栏：三个直接动作（点击即执行，无子菜单）----
         bar = self.menuBar()
-        m_file = bar.addMenu("&File")
-        for label, shortcut, slot in (("New Project", "Ctrl+N", self._new_project),
-                                      ("Open Project...", "Ctrl+O", self._open_project),
-                                      ("Save Project...", "Ctrl+S", self._save_project)):
-            act = m_file.addAction(label, slot)
-            act.setShortcut(shortcut)
-        m_file.addSeparator()
-        m_file.addAction("Exit", self.close).setShortcut("Ctrl+Q")
-        bar.addMenu("&Tools").addAction("Settings...", self._open_settings)
+        act = bar.addAction("Settings")
+        act.setShortcut("Ctrl+,")
+        act.triggered.connect(self._open_settings)
+        act = bar.addAction("Guide")
+        act.setShortcut("F1")
+        act.triggered.connect(self._show_app_guide)
+        act = bar.addAction("About")
+        act.triggered.connect(self._show_about)
 
         # ---- 状态栏：左侧最近消息 + 右侧单格常驻摘要 ----
         self.status_summary = QLabel()
@@ -190,10 +194,11 @@ class MainWindow(QMainWindow):
 
     # ---- 步骤检查条（Phase 2）----
     def _step_states(self) -> list[bool]:
-        annotated = len(self.results) > 0
+        annotated = any(self.results.values())
         reviewed = annotated and all(
-            res.status != "red" or self.confirmed.get(sid)
-            for sid, res in self.results.items())
+            (res := self.chosen_result(s.seq_id)) is not None
+            and (res.status != "red" or self.confirmed.get(s.seq_id))
+            for s in self.sequences if self.results.get(s.seq_id))
         # 4 步：1 Import&BLAST 就绪（序列+hits）→ 2 已注释 → 3 已审核 → 4 已导出
         return [
             len(self.sequences) > 0 and bool(self.hits),
@@ -206,8 +211,19 @@ class MainWindow(QMainWindow):
         states = self._step_states()
         for i in range(row):
             if not states[i]:
-                return True, f"finish step {i + 1} first"
+                return True, self._step_block_reason(i)
         return False, ""
+
+    def _step_block_reason(self, step: int) -> str:
+        """第 step 步（0 基）未完成的具体原因；步骤条悬停提示与点击日志共用。"""
+        if step == 0:
+            if not self.sequences:
+                return "step 1 has no sequences yet - paste FASTA and run BLAST"
+            return "step 1 has no BLAST hits yet - run BLAST (or wait for the queue)"
+        if step == 1:
+            return "step 2 has no annotation results yet - start annotation"
+        return "step 3 is not fully reviewed - adopt a result per sequence " \
+               "and confirm red ones"
 
     def _refresh_nav(self):
         states = self._step_states()
@@ -232,6 +248,10 @@ class MainWindow(QMainWindow):
             font = item.font()
             font.setBold(i == cur)
             item.setFont(font)
+            # 锁定的步骤悬停即显示缺什么（QListWidget 默认按 ToolTipRole 弹出）
+            block = next((j for j, s in enumerate(states[:i]) if not s), None)
+            item.setToolTip("" if block is None else
+                            f"Locked - {self._step_block_reason(block)}")
         self.update_summary()
 
     def update_summary(self):
@@ -249,11 +269,12 @@ class MainWindow(QMainWindow):
         elif len(genes) > 1:
             text += f" \u00b7 {len(genes)} gene types"
 
-        ann = len(self.results)
-        warn = sum(1 for r in self.results.values()
-                   if getattr(r, "status", "red") == "yellow")
-        red = [sid for sid, r in self.results.items()
-               if getattr(r, "status", "red") == "red"]
+        ann = sum(1 for s in self.sequences if self.results.get(s.seq_id))
+        chosen = [self.chosen_result(s.seq_id) for s in self.sequences
+                  if self.results.get(s.seq_id)]
+        warn = sum(1 for r in chosen if getattr(r, "status", "red") == "yellow")
+        red = [s.seq_id for s in self.sequences if self.results.get(s.seq_id)
+               and getattr(self.chosen_result(s.seq_id), "status", "red") == "red"]
         open_red = sum(1 for sid in red if not self.confirmed.get(sid))
         if ann:
             parts = [f"annotated {ann}/{n}"]
@@ -285,6 +306,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(text)
 
     # ---- 序列状态维护（页面调用）----
+    def chosen_accession(self, seq_id: str) -> str | None:
+        """采纳（导出/步骤状态用）的 variant accession；未显式采纳时取第一个。"""
+        variants = self.results.get(seq_id)
+        if not variants:
+            return None
+        acc = self.chosen_ref.get(seq_id)
+        return acc if acc in variants else next(iter(variants))
+
+    def chosen_result(self, seq_id: str):
+        return (self.results.get(seq_id) or {}).get(self.chosen_accession(seq_id) or "")
+
     def load_fasta_file(self, path: str):
         from Bio import SeqIO
         for rec in SeqIO.parse(path, "fasta"):
@@ -295,7 +327,7 @@ class MainWindow(QMainWindow):
         if any(x.seq_id == s.seq_id for x in self.sequences):
             raise ValueError(f"Duplicate Seq ID: {s.seq_id}")
         self.sequences.append(s)
-        self.selected_ref.setdefault(s.seq_id, None)
+        self.selected_refs.setdefault(s.seq_id, [])
         self.update_summary()
 
     def remove_sequence(self, seq_id: str):
@@ -307,26 +339,30 @@ class MainWindow(QMainWindow):
         if new is None:
             self.hits.pop(old, None)
             self.results.pop(old, None)
-            self.selected_ref.pop(old, None)
+            self.selected_refs.pop(old, None)
+            self.chosen_ref.pop(old, None)
             self.confirmed.pop(old, None)
         else:
-            for store in (self.hits, self.results, self.selected_ref, self.confirmed):
+            for store in (self.hits, self.selected_refs, self.chosen_ref, self.confirmed):
                 if old in store:
                     store[new] = store.pop(old)
+            if old in self.results:
+                self.results[new] = self.results.pop(old)
             # SeqInput 与结果对象自身的 seq_id 同步改（导出文件名取自 res.seq_id）
             for s in self.sequences:
                 if s.seq_id == old:
                     s.seq_id = new
-            res = self.results.get(new)
-            if res is not None and getattr(res, "seq_id", None) == old:
-                res.seq_id = new
+            for res in self.results.get(new, {}).values():
+                if getattr(res, "seq_id", None) == old:
+                    res.seq_id = new
         self.update_summary()
 
     def reset_results(self):
         self.results.clear()
         self.hits.clear()
+        self.chosen_ref.clear()
+        self.selected_refs.clear()
         self.confirmed.clear()
-        self.selected_ref.clear()
         self.update_summary()
 
     # ---- 配置 ----
@@ -371,30 +407,29 @@ class MainWindow(QMainWindow):
             self.page_import.progress.setValue(0)
 
     def start_annotation(self):
+        """按（序列 × 选中参考）成对提交：同一序列对多个参考各注释一次，
+        结果按 ref_key 落账，供审核页对比与采纳。"""
         self.annotate_queue.reset()
         self._annotate_pending = 0
         gen = self.annotate_queue.gen
         for s in self.sequences:
-            acc = self.selected_ref.get(s.seq_id)
-            hits = None
-            ref_acc = None
-            if acc:
-                # 行内单选存的是 accession：与已知命中匹配时按命中走
+            selected = (self.selected_refs.get(s.seq_id) or [])[:5]
+            if not selected:
+                self.log(f"[{s.seq_id}] no reference chosen - skipped")
+                continue
+            for acc in selected:
+                # 行内勾选存的是 accession：与已知命中匹配时按命中走
                 # （保留 BLAST HSP 窗口截取信息），否则走直接下载通道（§6.1）
                 hit = next((h for h in self.hits.get(s.seq_id, [])
                             if h.accession == acc), None)
-                if hit is not None:
-                    hits = [hit]
-                else:
-                    ref_acc = acc
-            else:
-                self.log(f"[{s.seq_id}] no reference chosen - skipped")
-                continue
-            self.annotate_queue.submit(AnnotateWorker(s, self.make_config(),
-                                                      self.annotate_queue, gen,
-                                                      hits=hits,
-                                                      reference_accession=ref_acc))
-            self._annotate_pending += 1
+                hits = [hit] if hit is not None else None
+                ref_acc = None if hit is not None else acc
+                self.annotate_queue.submit(AnnotateWorker(s, self.make_config(),
+                                                          self.annotate_queue, gen,
+                                                          hits=hits,
+                                                          reference_accession=ref_acc,
+                                                          ref_key=acc))
+                self._annotate_pending += 1
         if self._annotate_pending == 0:
             self.log("Nothing to annotate.")
             self.page_reference.on_queue_finished()
@@ -403,7 +438,7 @@ class MainWindow(QMainWindow):
             self.page_reference.progress.setValue(0)
 
     # gen（批次代次号）不匹配 = 项目丢弃后迟到的回调：整条丢弃，不碰任何状态
-    def _on_blast_finished(self, gen: int, seq_id: str, hits: list):
+    def _on_blast_finished(self, gen: int, seq_id: str, ref_key: str, hits: list):
         if gen != self.blast_queue.gen:
             return
         self._blast_running.discard(seq_id)
@@ -411,14 +446,14 @@ class MainWindow(QMainWindow):
             self.hits[seq_id] = hits         # 序列已被丢弃则不落陈旧命中
         self._after_blast_task()
 
-    def _on_blast_failed(self, gen: int, seq_id: str, message: str):
+    def _on_blast_failed(self, gen: int, seq_id: str, ref_key: str, message: str):
         self.log(f"[{seq_id}] Failed: {message.splitlines()[-1] if message else ''}")
         if gen != self.blast_queue.gen:
             return
         self._blast_running.discard(seq_id)
         self._after_blast_task()
 
-    def _on_blast_skipped(self, gen: int, seq_id: str):
+    def _on_blast_skipped(self, gen: int, seq_id: str, ref_key: str):
         if gen != self.blast_queue.gen:
             return
         self._blast_running.discard(seq_id)
@@ -437,23 +472,34 @@ class MainWindow(QMainWindow):
             if self.sequences:               # 项目已丢弃则不再强制跳转
                 self.go_page(1)              # BLAST 排空 → 自动进入参考选择
 
-    def _on_annotate_finished(self, gen: int, seq_id: str, result: object):
+    def _on_annotate_finished(self, gen: int, seq_id: str, ref_key: str, result: object):
         if gen != self.annotate_queue.gen:
             return
         if any(s.seq_id == seq_id for s in self.sequences):
-            self.results[seq_id] = result    # 守卫与 BLAST 分支一致：删除/改名后不落陈旧结果
+            self.results.setdefault(seq_id, {})[ref_key] = result
+            # 首个返回者默认采纳（按排名序提交，通常即推荐命中）；可随后在审核页改采
+            self.chosen_ref.setdefault(seq_id, ref_key)
         self._after_annotate_task()
 
-    def _on_annotate_failed(self, gen: int, seq_id: str, message: str):
-        self.log(f"[{seq_id}] Failed: {message.splitlines()[-1] if message else ''}")
+    def _on_annotate_failed(self, gen: int, seq_id: str, ref_key: str, message: str):
+        self.log(f"[{seq_id}] Failed vs {ref_key}: "
+                 f"{message.splitlines()[-1] if message else ''}")
         if gen != self.annotate_queue.gen:
             return
         self._after_annotate_task()
 
-    def _on_annotate_skipped(self, gen: int, seq_id: str):
+    def _on_annotate_skipped(self, gen: int, seq_id: str, ref_key: str):
         if gen != self.annotate_queue.gen:
             return
         self._after_annotate_task()
+
+    def _reconcile_chosen(self):
+        """队列排空后校正采纳者：采纳的 variant 失败/被跳过时回落到首个可用者。"""
+        for sid, variants in self.results.items():
+            if not variants:
+                self.chosen_ref.pop(sid, None)
+            elif self.chosen_ref.get(sid) not in variants:
+                self.chosen_ref[sid] = next(iter(variants))
 
     def _after_annotate_task(self):
         self.update_summary()
@@ -461,6 +507,7 @@ class MainWindow(QMainWindow):
         self.page_reference.progress.setValue(
             self.page_reference.progress.maximum() - max(self._annotate_pending, 0))
         if self._annotate_pending <= 0:
+            self._reconcile_chosen()
             self.page_reference.on_queue_finished()
 
     def _on_worker_progress(self, seq_id: str, stage: str, frac: float):
@@ -476,54 +523,6 @@ class MainWindow(QMainWindow):
         self._annotate_pending = 0
         self._blast_running.clear()
 
-    def _new_project(self):
-        if self.sequences and QMessageBox.question(
-                self, "New", "Discard the current project?") != QMessageBox.StandardButton.Yes:
-            return
-        self._abandon_queues()
-        self.sequences.clear()
-        self.reset_results()
-        self.exported = False
-        self.page_import.refresh()
-        self.go_page(0)
-
-    def _save_project(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save Project", "project.fap.json",
-                                              "fungal_annot project (*.json)")
-        if not path:
-            return
-        save_project(path, self.sequences, self.hits, self.selected_ref,
-                     self.results, self.settings, confirmed=self.confirmed,
-                     exported=self.exported)
-        self.log(f"Project saved: {path}")
-
-    def _open_project(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open Project", "",
-                                              "fungal_annot project (*.json)")
-        if not path:
-            return
-        try:
-            (sequences, hits, selected_ref, results, settings,
-             confirmed, exported) = load_project(path)
-        except (OSError, ValueError, KeyError) as ex:
-            QMessageBox.warning(self, "Failed to open", str(ex))
-            return
-        self._abandon_queues()          # 在途队列作废：迟到的回调不得写进新项目
-        self.sequences = sequences
-        self.hits = hits
-        self.selected_ref = selected_ref
-        self.results = results
-        self.confirmed = confirmed      # 红灯确认随项目恢复，导出拦截状态一致
-        self.exported = exported
-        self.settings = settings or self.settings
-        self.page_import.refresh()
-        self.page_reference.refresh()
-        self.page_review.refresh()
-        self.page_export.refresh()
-        self.update_summary()
-        self._refresh_nav()
-        self.log(f"Project loaded: {path} ({len(sequences)} sequence(s))")
-
     def _open_settings(self):
         dlg = SettingsDialog(self.settings, self)
         if dlg.exec():
@@ -531,3 +530,12 @@ class MainWindow(QMainWindow):
             save_settings(self.settings)
             self.page_import.refresh()
             self.log("Settings saved.")
+
+    def _show_app_guide(self):
+        """F1 / 菜单 Guide：全软件使用指南（四步流程、设置、状态规则、提交路径）；
+        单页的操作细节由各页按钮区的 Help 提供，两者不混用。"""
+        show_app_guide(self)
+
+    def _show_about(self):
+        from .. import __version__
+        show_about(__version__, self)

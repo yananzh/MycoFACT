@@ -1,7 +1,8 @@
-# fungal_annot — 真菌多基因鉴定序列 Feature Table 自动生成工具
+# MycoFACT — 真菌多基因鉴定序列 Feature Table 自动生成工具
 
-通过"参考注释迁移"为真菌 marker 基因序列（LSU/SSU/tef1/rpb1/rpb2/tub2/act/cal 及线粒体
-marker）自动生成 NCBI 五列 feature table（.tbl）。设计文档见《真菌多基因序列FeatureTable工具-开发计划.md》。
+**MycoFACT**（**F**ungal **F**eature **A**nnotation & **C**omparison **T**ool，包名
+`fungal_annot`）通过"参考注释迁移"为真菌 marker 基因序列（LSU/SSU/tef1/rpb1/rpb2/tub2/act/cal
+及线粒体 marker）自动生成 NCBI 五列 feature table（.tbl）。设计文档见《真菌多基因序列FeatureTable工具-开发计划.md》。
 
 ## 当前状态
 

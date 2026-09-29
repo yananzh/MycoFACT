@@ -1,14 +1,14 @@
 """BLAST 命中表格（§7.2 P3）：accession / 标题 / pident / qcovs / 长度比 /
-**行内单选框**（点选即选为参考，默认第一行=推荐）。
+**行内复选框**（勾选即参与对比注释，1-5 个，默认勾前 N=Settings 的 default_refs）。
 
-推荐行用整行淡蓝底标示（§6.1 排序第一名），Use 列的单选框默认勾选该行；
-长度比 = 参考长度 / 查询长度，约 1.0–1.5 为推荐区间（§6.1 长度偏好）。
+推荐行用整行淡蓝底标示（§6.1 排序第一名）；长度比 = 参考长度 / 查询长度，
+约 1.0–1.5 为推荐区间（§6.1 长度偏好）。
 """
 import re
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (QAbstractItemView, QHeaderView, QRadioButton,
+from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QHeaderView,
                              QTableWidget, QTableWidgetItem)
 
 # 老式 NCBI 标题前缀 "gi|1779767538|gb|MK967294.1|" —— accession 已单列展示，
@@ -36,8 +36,9 @@ class HitTable(QTableWidget):
         super().__init__(0, 6, parent)
         self.setHorizontalHeaderLabels(["accession", "Title", "Ident %", "Cover %",
                                         "Ratio", "Use"])
+        self.verticalHeader().setVisible(False)
         self.horizontalHeader().setDefaultAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)   # 与单元格左对齐一致
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -47,17 +48,19 @@ class HitTable(QTableWidget):
             self.horizontalHeader().setSectionResizeMode(
                 col, QHeaderView.ResizeMode.ResizeToContents)
         self.setColumnWidth(5, 46)      # Use
-        self._on_select = None
-        self._radios: list[QRadioButton] = []
+        self._on_toggle = None
+        self._checks: list[QCheckBox] = []
         self._accessions: list[str] = []
 
-    def populate(self, hits, query_len: int, on_select=None, chosen: str | None = None):
-        """填充命中表。chosen 为该序列已选 accession；无记录时默认选第一行，
-        默认选择完成后回调 on_select(第一行 accession) 一次。"""
-        self._on_select = on_select
-        self.setRowCount(0)          # 顺带清掉旧行的单选框控件
-        self._radios = []
+    def populate(self, hits, query_len: int, on_toggle=None,
+                 selected: list[str] | None = None):
+        """填充命中表。selected 为该序列已选 accession 列表（勾选即参与对比）；
+        勾选状态变化回调 on_toggle(accession, checked)，上限与默认选择由页面裁定。"""
+        self._on_toggle = on_toggle
+        self.setRowCount(0)          # 顺带清掉旧行的复选框控件
+        self._checks = []
         self._accessions = []
+        wanted = set(selected or [])
         for h in hits or []:
             row = self.rowCount()
             self.insertRow(row)
@@ -87,22 +90,25 @@ class HitTable(QTableWidget):
             qcovs_item = self.item(row, 3)
             if h.qcovs >= 99.95:
                 qcovs_item.setForeground(QColor("#1a7f37"))
-            # 行内单选框：构造时不勾选，循环结束后统一勾默认行，
-            # 由 toggled 回调精确触发一次 on_select
-            radio = QRadioButton()
-            radio.setToolTip("Use this hit as the reference")
-            radio.toggled.connect(lambda on, r=radio, i=row: self._radio_toggled(on, r, i))
-            self.setCellWidget(row, 5, radio)
-            self._radios.append(radio)
-        if not self._radios:
-            return
-        if chosen:
-            # 已选 accession 在命中列表内 → 勾选该行（触发一次 on_select，值不变）；
-            # 不在列表内（弹窗手填的直接下载 accession）→ 不勾选、不覆盖已有选择
-            if chosen in self._accessions:
-                self._radios[self._accessions.index(chosen)].setChecked(True)
-            return
-        self._radios[0].setChecked(True)   # 无记录时默认推荐行
+            # 行内复选框：勾选 = 该参考参与对比注释（页面裁定 1-5 上限）
+            chk = QCheckBox()
+            chk.setChecked(h.accession in wanted)
+            chk.setToolTip("Compare annotation against this reference (up to 5)")
+            chk.toggled.connect(lambda on, i=row: self._check_toggled(on, i))
+            self.setCellWidget(row, 5, chk)
+            self._checks.append(chk)
+
+    def sync_checks(self, selected: list[str]):
+        """把勾选状态统一同步回 selected 列表（页面拒绝某次勾选后回调撤回用）。"""
+        wanted = set(selected or [])
+        for row, acc in enumerate(self._accessions):
+            if row >= len(self._checks):
+                break
+            chk = self._checks[row]
+            if chk.isChecked() != (acc in wanted):
+                chk.blockSignals(True)
+                chk.setChecked(acc in wanted)
+                chk.blockSignals(False)
 
     def mark_recommended(self, row: int):
         """排序第一名：整行淡蓝底（§6.1）。推荐说明并入既有 tooltip——不能覆盖
@@ -120,21 +126,7 @@ class HitTable(QTableWidget):
                 continue
             item.setToolTip(f"{tip}\n\n{existing}" if existing else tip)
 
-    def current_accession(self) -> str | None:
-        row = self.currentRow()
-        if row < 0:
-            return None
-        item = self.item(row, 0)
-        return item.text() if item else None
-
     # ---- 内部 ----
-    def _radio_toggled(self, on: bool, radio: QRadioButton, row: int):
-        if not on:
-            return
-        for r in self._radios:               # 手动互斥（各单元格控件父级不同，自动互斥不可靠）
-            if r is not radio and r.isChecked():
-                r.blockSignals(True)
-                r.setChecked(False)
-                r.blockSignals(False)
-        if self._on_select:
-            self._on_select(self._accessions[row])
+    def _check_toggled(self, on: bool, row: int):
+        if self._on_toggle:
+            self._on_toggle(self._accessions[row], on)

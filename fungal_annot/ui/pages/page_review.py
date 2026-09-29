@@ -1,28 +1,32 @@
-"""P4 注释审核页（§7.2，核心交互页）：状态用动作化文案表达（Ready / Ready · review
-warnings / Needs review），计数条附图例链接与 Re-check all；feature 表格支持增删行、
-编辑后 600ms 防抖自动重验（无比对上下文的项目加载态禁编辑并给行内提示）；Issues 列表
-带修复建议，点击展开术语卡并跳转相关 feature 行；红灯序列需 Confirm 后才能导出。"""
+"""P4 注释审核页（§7.2，核心交互页）：两个列表——左侧基因名单，右侧注释结果列表
+（该序列每个参考一行：Reference / Status / Identity / Issues / Use，点行查看该
+variant，Use 列单选采纳，Issues 列悬停可见完整问题与建议）；feature 表格支持增删行、
+编辑后 600ms 防抖自动重验（无比对上下文的项目加载态禁编辑并给行内提示）；
+红灯序列需 Confirm 后才能导出。"""
+import html
+
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QTextCursor
-from PyQt6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QListWidget,
-                             QListWidgetItem, QMessageBox, QPlainTextEdit,
-                             QPushButton, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QFrame, QHBoxLayout,
+                             QHeaderView, QLabel, QListWidget, QListWidgetItem,
+                             QMessageBox, QPlainTextEdit, QPushButton, QRadioButton,
+                             QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...core.tbl_writer import write_tbl
 from ...core.validator import status_of, validate
 from ..widgets.feature_table import FeatureTable
 from ..widgets.help import (STATUS_COLOR as _STATUS_COLOR,
-                            STATUS_HINT as _STATUS_LABEL,
                             STATUS_MARK as _STATUS_MARK,
-                            show_help, show_page_help)
+                            show_page_help)
 _SEVERITY = {"error": ("⛔ ", QColor("#cf222e")),
              "warning": ("⚠ ", QColor("#9a6700")),
              "info": ("ℹ ", QColor("#57606a"))}
 
 # 已知问题 → 一句建议动作（§11：验证报告用自然语言解释）
 HINTS = {
-    "internal_stop": "Check the transl table (reference qualifier vs preset). A wrong "
-                     "table can create false stop codons.",
+    "internal_stop": "Most often a frameshift: the query is missing or has an extra "
+                     "base (check for sequencing errors). A wrong transl table can "
+                     "also create false stop codons.",
     "exon_outside_aligned": "Normal for partial amplicons - your query simply does not "
                             "cover the whole gene. No action needed.",
     "exon_map_fail": "A reference exon has no counterpart in your sequence (indel/gap). "
@@ -43,27 +47,28 @@ HINTS = {
                       "annotation may be wrong.",
     "no_stop_codon": "Verify the 3' end is genuinely partial; otherwise the reference "
                      "annotation may be wrong.",
-    "cds_phase": "Mark the 3' end partial, or check exon boundaries.",
+    "cds_phase": "A length that is not a multiple of three usually means a frameshift "
+                 "(missing/extra base) - verify the sequence; only mark the end "
+                 "partial if it genuinely is.",
     "protein_identity": "Protein differs a lot from the reference - it may be misannotated "
                         "or from a distant species.",
 }
 
-# issue code → 术语卡词条：点击该条 issue 直接展开解释
-_ISSUE_HELP = {
-    "internal_stop": "transl_table",
-    "transl_table_conflict": "transl_table",
-    "low_identity": "identity",
-}
 
-# issue code → 受影响的 feature 类型：点击 issue 跳转到表格中对应行
-_ISSUE_ROW_TYPE = {
-    "internal_stop": "CDS", "no_start_codon": "CDS", "no_stop_codon": "CDS",
-    "cds_phase": "CDS", "protein_identity": "CDS", "transl_table_conflict": "CDS",
-    "n_boundary": "CDS", "low_identity": "CDS",
-    "modifier_missing": "source", "modifier_format": "source",
-    "country_unverified": "source",
-    "seqid_invalid": "gene",
-}
+def _issues_tooltip(issues) -> str:
+    """结果列表 Issues 列的悬停文本：完整问题清单（级别 + 说明 + 建议动作）。"""
+    if not issues:
+        return ""
+    lines = []
+    for i in issues:
+        mark, _ = _SEVERITY.get(i.level, ("· ", None))
+        line = f"{mark}{i.level.capitalize()}: {i.message}"
+        hint = HINTS.get(i.code)
+        if hint:
+            line += f"\n   → {hint}"
+        lines.append(line)
+    text = "\n".join(lines)
+    return text if len(text) <= 900 else text[:900].rstrip() + "…"
 
 
 def _alignment_text(mapping, ref_seq, width: int = 60) -> str:
@@ -136,6 +141,7 @@ class AlignmentDialog(QDialog):
 
 class PageReview(QWidget):
     title = "3. Review Annotation"
+    help_key = "page_review"
 
     def __init__(self, win):
         super().__init__()
@@ -145,27 +151,12 @@ class PageReview(QWidget):
         outer.setContentsMargins(16, 16, 16, 16)
         outer.setSpacing(10)
 
-        # ---- 顶部计数条：总览 + 图例 + 全量重查 ----
+        # ---- 顶部计数条：总览 ----
         ribbon = QHBoxLayout()
         self.lbl_ribbon = QLabel("")
         self.lbl_ribbon.setTextFormat(Qt.TextFormat.RichText)
-        self.lbl_legend = QLabel('<a href="#legend">What do the colors mean?</a>')
-        self.lbl_legend.setTextFormat(Qt.TextFormat.RichText)
-        self.lbl_legend.setToolTip("Explains Ready / Warnings / Needs review")
-        self.lbl_legend.linkActivated.connect(lambda _: show_help("status_colors", self))
-        self.b_recheck = QPushButton("Re-check all")
-        self.b_recheck.setToolTip("Re-run validation on every annotated sequence with the "
-                                  "current settings (e.g. after changing the identity "
-                                  "threshold)")
-        self.b_recheck.clicked.connect(self._recheck_all)
-        self.b_next_issue = QPushButton("Next issue →")
-        self.b_next_issue.setToolTip("Jump to the next sequence with warnings or errors")
-        self.b_next_issue.clicked.connect(self._jump_next_issue)
         ribbon.addWidget(self.lbl_ribbon)
         ribbon.addStretch(1)
-        ribbon.addWidget(self.lbl_legend)
-        ribbon.addWidget(self.b_recheck)
-        ribbon.addWidget(self.b_next_issue)
         outer.addLayout(ribbon)
 
         body = QHBoxLayout()
@@ -178,6 +169,36 @@ class PageReview(QWidget):
         body.addLayout(left, 1)
 
         right = QVBoxLayout()
+        # ---- Annotation results：右侧列表——左侧选中基因的全部注释结果，
+        #      点行查看该 variant，Use 列单选采纳（导出与步骤状态取采纳者）----
+        self.viewed_ref: str | None = None      # 当前查看的 variant（切换序列时回落采纳者）
+        self._use_radios: list[QRadioButton] = []
+        right.addWidget(QLabel("Annotation results"))
+        self.variant_table = QTableWidget(0, 5)
+        self.variant_table.setHorizontalHeaderLabels(
+            ["Reference", "Status", "Identity", "Issues", "Use"])
+        self.variant_table.verticalHeader().setVisible(False)
+        self.variant_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self.variant_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.variant_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.variant_table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.variant_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch)
+        self.variant_table.setMaximumHeight(132)
+        self.variant_table.clicked.connect(self._on_variant_clicked)
+        self.variant_table.itemDoubleClicked.connect(self._on_variant_double_clicked)
+        right.addWidget(self.variant_table)
+
+        # ---- 行内问题提示：当前查看 variant 的 error/warning 与建议动作，
+        #      直接可见，不只藏在 Issues 列的悬停 tooltip 里 ----
+        self.lbl_issues = QLabel("")
+        self.lbl_issues.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_issues.setWordWrap(True)
+        self.lbl_issues.setVisible(False)
+        right.addWidget(self.lbl_issues)
+
         self.feature_table = FeatureTable()
         self.feature_table.edited.connect(self._on_edited)
         right.addWidget(self.feature_table, 2)
@@ -206,18 +227,19 @@ class PageReview(QWidget):
         toolbar.addWidget(sep)
         toolbar.addWidget(b_align)
         toolbar.addWidget(self.b_ref_feat)
-        toolbar.addStretch(1)
+        self.b_confirm = QPushButton("Confirm for export")
+        self.b_confirm.setToolTip("Record that you reviewed this sequence knowingly "
+                                  "(optional note kept in the log). Required for red "
+                                  "sequences before export.")
+        self.b_confirm.clicked.connect(self._manual_confirm)
+        self.b_confirm.setEnabled(False)
+        toolbar.addWidget(self.b_confirm)
         b_help = QPushButton("Help")
         b_help.setToolTip("How to use this page: steps, terms, tips")
         b_help.clicked.connect(lambda: show_page_help("page_review", self))
         toolbar.addWidget(b_help)
+        toolbar.addStretch(1)
         right.addLayout(toolbar)
-
-        self.lbl_issues = QLabel("Issues")
-        right.addWidget(self.lbl_issues)
-        self.issue_list = QListWidget()
-        self.issue_list.itemClicked.connect(self._on_issue_clicked)
-        right.addWidget(self.issue_list, 1)
         body.addLayout(right, 3)
         outer.addLayout(body, 1)
 
@@ -230,50 +252,49 @@ class PageReview(QWidget):
         self.lbl_project_hint.setVisible(False)
         outer.addWidget(self.lbl_project_hint)
 
-        # ---- 底部状态条：状态文案 + 上下文动作（Confirm 随状态可用）----
-        strip = QHBoxLayout()
-        self.lbl_status = QLabel("-")
-        self.lbl_status.setWordWrap(True)
-        strip.addWidget(self.lbl_status, 1)
-        self.b_confirm = QPushButton("Confirm for export")
-        self.b_confirm.setToolTip("Record that you reviewed this sequence knowingly "
-                                  "(optional note kept in the log). Required for red "
-                                  "sequences before export.")
-        self.b_confirm.clicked.connect(self._manual_confirm)
-        self.b_confirm.setEnabled(False)
-        strip.addWidget(self.b_confirm)
-        outer.addLayout(strip)
-
         # ---- 编辑后防抖自动重验 ----
         self._reval_timer = QTimer(self)
         self._reval_timer.setSingleShot(True)
         self._reval_timer.timeout.connect(self._auto_revalidate)
 
+    # ---- variant 辅助（同序列多参考结果）----
+    def _variants(self, sid: str) -> dict:
+        return self.win.results.get(sid) or {}
+
+    def _viewed_acc(self, sid: str) -> str | None:
+        """当前查看的 variant accession；未显式切换时跟随采纳者。"""
+        variants = self._variants(sid)
+        if not variants:
+            return None
+        if self.viewed_ref in variants:
+            return self.viewed_ref
+        return self.win.chosen_accession(sid)
+
+    def _viewed_result(self, sid: str):
+        acc = self._viewed_acc(sid)
+        return self._variants(sid).get(acc) if acc else None
+
     # ---- 计数条 ----
     def _update_ribbon(self):
         n = len(self.win.sequences)
-        done = len(self.win.results)
-        g = sum(1 for r in self.win.results.values() if r.status == "green")
-        y = sum(1 for r in self.win.results.values() if r.status == "yellow")
-        e = sum(1 for r in self.win.results.values() if r.status == "red")
+        done = sum(1 for s in self.win.sequences if self.win.results.get(s.seq_id))
+        g = y = e = 0
+        for s in self.win.sequences:
+            res = self.win.chosen_result(s.seq_id)
+            if res is None:
+                continue
+            if res.status == "green":
+                g += 1
+            elif res.status == "yellow":
+                y += 1
+            else:
+                e += 1
         self.lbl_ribbon.setText(
             f'<span style="color:#24292f">{n} sequences</span> · '
             f'<span style="color:#57606a">{done} annotated</span> &nbsp;&nbsp; '
             f'<span style="color:#1a7f37">✓ {g} ready</span> &nbsp; '
             f'<span style="color:#9a6700">⚠ {y} warnings</span> &nbsp; '
             f'<span style="color:#cf222e">✗ {e} need review</span>')
-
-    def _jump_next_issue(self):
-        """循环跳到下一条有 warning/error 的序列。"""
-        order = [self.win.sequences[i].seq_id for i in range(self.seq_list.count())]
-        flagged = [sid for sid in order
-                   if self.win.results.get(sid) and self.win.results[sid].status != "green"]
-        if not flagged:
-            return
-        pos = order.index(self.current) if self.current in order else -1
-        after = [sid for sid in flagged if order.index(sid) > pos]
-        target = (after or flagged)[0]
-        self.seq_list.setCurrentRow(order.index(target))
 
     # ---- 数据加载 ----
     def refresh(self):
@@ -282,7 +303,7 @@ class PageReview(QWidget):
         self.seq_list.blockSignals(True)
         self.seq_list.clear()
         for s in self.win.sequences:
-            res = self.win.results.get(s.seq_id)
+            res = self.win.chosen_result(s.seq_id)
             state = res.status if res else "pending"
             mark = _STATUS_MARK.get(state, "○ not annotated")
             item = QListWidgetItem(f"{mark}  {s.seq_id}")
@@ -298,7 +319,7 @@ class PageReview(QWidget):
 
     def _refresh_seq_row(self, seq_id: str):
         """只刷新清单中该序列的状态行（自动重验时避免整表重建打断编辑）。"""
-        res = self.win.results.get(seq_id)
+        res = self.win.chosen_result(seq_id)
         state = res.status if res else "pending"
         mark = _STATUS_MARK.get(state, "○ not annotated")
         for row in range(self.seq_list.count()):
@@ -313,23 +334,30 @@ class PageReview(QWidget):
             return
         sid = self.win.sequences[row].seq_id
         self.current = sid
+        self.viewed_ref = None       # 切换序列 → 回到查看其采纳的 variant
         self.load_result(sid)
 
     def load_result(self, seq_id: str):
-        res = self.win.results.get(seq_id)
-        if res is None:
+        variants = self._variants(seq_id)
+        if not variants:
+            self.viewed_ref = None
+            self._use_radios = []
+            self.variant_table.setRowCount(0)
+            self.variant_table.setVisible(False)
             self.feature_table.setRowCount(0)
             self.feature_table.set_editable(False)
             self.b_add_feat.setEnabled(False)
             self.b_del_feat.setEnabled(False)
             self.lbl_project_hint.setVisible(False)
             self.lbl_issues.setVisible(False)
-            self.issue_list.setVisible(False)
-            self.issue_list.clear()
-            self.lbl_status.setText("not annotated")
             self.b_confirm.setEnabled(False)
             self.b_confirm.setText("Confirm for export")
             return
+        if self.viewed_ref not in variants:
+            self.viewed_ref = self.win.chosen_accession(seq_id)
+        self._populate_variant_table(seq_id)
+        self._update_issues_hint(seq_id)
+        res = variants[self.viewed_ref]
         # 无比对上下文（项目加载态）→ 禁编辑并给出常驻提示
         editable = res.detail is not None
         self.feature_table.set_editable(editable)
@@ -337,37 +365,118 @@ class PageReview(QWidget):
         self.b_del_feat.setEnabled(editable)
         self.lbl_project_hint.setVisible(not editable)
         self.feature_table.build_from_features(res.features)
-        self._load_issues(seq_id)
+        self._update_confirm_button(seq_id)
 
-    def _load_issues(self, seq_id: str):
-        """刷新 Issues 区与底部状态条（不触碰 feature 表格，保留编辑焦点）。"""
-        res = self.win.results.get(seq_id)
-        if res is None:
+    # ---- Annotation results ----
+    def _populate_variant_table(self, seq_id: str):
+        """结果列表：该序列的每个参考一行（按选择排名序）；点行查看该 variant，
+        Use 列单选采纳，Issues 列悬停查看完整问题清单。"""
+        variants = self._variants(seq_id)
+        order = list(self.win.selected_refs.get(seq_id) or [])
+        accs = ([a for a in order if a in variants]
+                + [a for a in variants if a not in order])
+        chosen_acc = self.win.chosen_accession(seq_id)
+        self.variant_table.setRowCount(0)
+        self.variant_table.setVisible(True)
+        self._use_radios = []
+        for acc in accs:
+            res = variants[acc]
+            row = self.variant_table.rowCount()
+            self.variant_table.insertRow(row)
+            self.variant_table.setItem(row, 0, QTableWidgetItem(acc))
+            st = QTableWidgetItem(_STATUS_MARK.get(res.status, res.status))
+            st.setForeground(QColor(_STATUS_COLOR.get(res.status, "#24292f")))
+            self.variant_table.setItem(row, 1, st)
+            prov = getattr(res, "provenance", None)
+            ident = getattr(prov, "nt_identity", None) if prov else None
+            self.variant_table.setItem(
+                row, 2, QTableWidgetItem(f"{ident:.1%}" if ident is not None else "-"))
+            n_err = sum(1 for i in res.issues if i.level == "error")
+            n_warn = sum(1 for i in res.issues if i.level == "warning")
+            issues_item = QTableWidgetItem(
+                f"{len(res.issues)}"
+                + (f" ({n_err}E/{n_warn}W)" if res.issues else ""))
+            issues_item.setToolTip(_issues_tooltip(res.issues))
+            if n_err:
+                issues_item.setForeground(QColor("#cf222e"))
+            elif n_warn:
+                issues_item.setForeground(QColor("#9a6700"))
+            self.variant_table.setItem(row, 3, issues_item)
+            use = QRadioButton()
+            use.setChecked(acc == chosen_acc)   # 先设状态再连信号，避免误触发采纳
+            use.setToolTip("Use this result for export")
+            use.toggled.connect(lambda on, a=acc: self._on_use_toggled(on, a))
+            self.variant_table.setCellWidget(row, 4, use)
+            self._use_radios.append(use)
+        if self.viewed_ref in accs:      # 当前查看行保持选中
+            self.variant_table.selectRow(accs.index(self.viewed_ref))
+
+    def _update_issues_hint(self, seq_id: str):
+        """行内提示当前查看 variant 的 error/warning（error 优先，附建议动作）。"""
+        res = self._viewed_result(seq_id)
+        issues = [i for i in (res.issues if res else [])
+                  if i.level in ("error", "warning")]
+        if not issues:
+            self.lbl_issues.setText("")
+            self.lbl_issues.setVisible(False)
             return
-        has_issues = bool(res.issues)
-        self.lbl_issues.setVisible(has_issues)
-        self.issue_list.setVisible(has_issues)
-        self.issue_list.clear()
-        for i in res.issues:
-            mark, color = _SEVERITY.get(i.level, ("· ", QColor("#57606a")))
-            text = f"{mark}{i.level.capitalize()}: {i.message}"
+        shown, rest = issues[:3], issues[3:]
+        lines = []
+        for i in shown:
+            mark, color = (("⛔", "#cf222e") if i.level == "error" else ("⚠", "#9a6700"))
+            line = f"<span style='color:{color}'><b>{mark} {html.escape(i.message)}</b>"
             hint = HINTS.get(i.code)
             if hint:
-                text += f"\n      → {hint}"
-            item = QListWidgetItem(text)
-            item.setForeground(color)
-            term = _ISSUE_HELP.get(i.code)
-            if term:
-                item.setData(Qt.ItemDataRole.UserRole, term)
-            item.setData(Qt.ItemDataRole.UserRole + 1, i.code)
-            if term or i.code in _ISSUE_ROW_TYPE:
-                item.setToolTip("Click to jump to the related feature row"
-                                + (" and open the glossary card" if term else ""))
-            self.issue_list.addItem(item)
-        # 底部状态条：状态文案 + Confirm 按钮随状态变化（红灯必选、黄灯可选、绿灯禁用）
-        self.lbl_status.setText(
-            f"{seq_id}: {_STATUS_LABEL.get(res.status, res.status)}"
-            + ("  (manually confirmed)" if self.win.confirmed.get(seq_id) else ""))
+                line += f"<br>&nbsp;&nbsp;→ {html.escape(hint)}"
+            lines.append(line + "</span>")
+        if rest:
+            lines.append(f"<span style='color:#57606a'>+{len(rest)} more - hover the "
+                         "Issues column for the full list</span>")
+        self.lbl_issues.setText("<br>".join(lines))
+        self.lbl_issues.setVisible(True)
+
+    def _on_use_toggled(self, on: bool, acc: str):
+        """Use 列单选：勾选即采纳该 variant（导出与步骤状态随之切换）。"""
+        if not on:
+            return
+        sid = self.current
+        if not sid or acc not in self._variants(sid):
+            return
+        if acc != self.win.chosen_accession(sid):
+            self._adopt(acc)
+
+    def _on_variant_clicked(self, index):
+        """点结果列表行 → 切换查看该 variant（feature 表 / Confirm 随之刷新）。"""
+        sid = self.current
+        if not sid or not index.isValid():
+            return
+        acc_item = self.variant_table.item(index.row(), 0)
+        acc = acc_item.text() if acc_item else None
+        if acc and acc != self.viewed_ref and acc in self._variants(sid):
+            self.viewed_ref = acc
+            self.load_result(sid)
+
+    def _on_variant_double_clicked(self, item):
+        acc_item = self.variant_table.item(item.row(), 0)
+        if acc_item:
+            self._adopt(acc_item.text())
+
+    def _adopt(self, acc: str):
+        sid = self.current
+        if not sid or acc not in self._variants(sid):
+            return
+        self.viewed_ref = acc
+        self.win.chosen_ref[sid] = acc
+        self.win.log(f"[{sid}] Adopted annotation from {acc}")
+        self.load_result(sid)            # 重建结果列表 / 清单标记 / 计数条
+        self.win._refresh_nav()
+        self.win.page_export.refresh()
+
+    def _update_confirm_button(self, seq_id: str):
+        """Confirm 按钮随所看 variant 的状态变化（红灯必选、黄灯可选、绿灯禁用）。"""
+        res = self._viewed_result(seq_id)
+        if res is None:
+            return
         if res.status == "red":
             confirmed = self.win.confirmed.get(seq_id)
             self.b_confirm.setEnabled(not confirmed)
@@ -384,14 +493,14 @@ class PageReview(QWidget):
 
     # ---- 编辑重验 ----
     def _on_edited(self):
-        res = self.win.results.get(self.current) if self.current else None
+        res = self._viewed_result(self.current) if self.current else None
         if res is None:
             return
         self._reval_timer.start(600)
 
     def _auto_revalidate(self):
         sid = self.current
-        res = self.win.results.get(sid)
+        res = self._viewed_result(sid) if sid else None
         if res is None or res.detail is None:
             return      # 项目加载态无比对上下文：静默跳过（行内提示已说明）
         s = next((x for x in self.win.sequences if x.seq_id == sid), None)
@@ -400,8 +509,8 @@ class PageReview(QWidget):
         try:
             features = self.feature_table.to_features()
         except ValueError as ex:
-            # 解析失败不弹窗打断输入：行内提示，保留上次有效结果
-            self.lbl_status.setText(f"⚠ Invalid edit - not re-validated: {ex}")
+            # 解析失败不弹窗打断输入：状态栏提示，保留上次有效结果
+            self.win.log(f"⚠ Invalid edit - not re-validated: {ex}")
             return
         issues = validate(s, features, res.detail.mapping, res.detail.ref_features,
                           res.detail.ref_seq, res.detail.preset, self.win.make_config())
@@ -410,28 +519,32 @@ class PageReview(QWidget):
         res.issues = list(res.detail.base_issues) + issues
         res.status = status_of(res.issues)
         res.tbl_text = write_tbl(features, sid)
-        self._load_issues(sid)
+        self._update_confirm_button(sid)
+        self._populate_variant_table(sid)
+        self._update_issues_hint(sid)
         self._refresh_seq_row(sid)
         self._update_ribbon()
-        self.lbl_status.setText(self.lbl_status.text() + "   ·   re-checked just now")
-        self.win.log(f"[{sid}] Auto re-validated: status {res.status}, "
-                     f"{len(issues)} issue(s)")
+        self.win.log(f"[{sid}] Auto re-validated vs {self.viewed_ref}: "
+                     f"status {res.status}, {len(issues)} issue(s)")
 
     def _recheck_all(self):
-        """用当前设置重查全部已注释序列（如改了 identity threshold 之后）。"""
+        """用当前设置重查全部已注释序列的全部 variant（如改了 identity threshold 后）。"""
         n = 0
         for s in self.win.sequences:
-            res = self.win.results.get(s.seq_id)
-            if res is None or res.detail is None:
-                continue
-            issues = validate(s, res.features, res.detail.mapping, res.detail.ref_features,
-                              res.detail.ref_seq, res.detail.preset, self.win.make_config())
-            res.issues = list(res.detail.base_issues) + issues
-            res.status = status_of(res.issues)
-            res.tbl_text = write_tbl(res.features, s.seq_id)
-            n += 1
+            for res in (self.win.results.get(s.seq_id) or {}).values():
+                if res.detail is None:
+                    continue
+                issues = validate(s, res.features, res.detail.mapping,
+                                  res.detail.ref_features, res.detail.ref_seq,
+                                  res.detail.preset, self.win.make_config())
+                res.issues = list(res.detail.base_issues) + issues
+                res.status = status_of(res.issues)
+                res.tbl_text = write_tbl(res.features, s.seq_id)
+                n += 1
         self.refresh()
-        self.win.log(f"Re-checked {n} sequence(s) with current settings")
+        if self.current:
+            self._update_issues_hint(self.current)
+        self.win.log(f"Re-checked {n} result variant(s) with current settings")
 
     # ---- feature 行增删 ----
     def _add_feature(self):
@@ -455,27 +568,12 @@ class PageReview(QWidget):
             return
         self._on_edited()
 
-    # ---- issue 点击 → 术语卡 + 行跳转 ----
-    def _on_issue_clicked(self, item):
-        term = item.data(Qt.ItemDataRole.UserRole)
-        if term:
-            show_help(term, self)
-        ftype = _ISSUE_ROW_TYPE.get(item.data(Qt.ItemDataRole.UserRole + 1))
-        if not ftype:
-            return
-        for row in range(self.feature_table.rowCount()):
-            titem = self.feature_table.item(row, 0)
-            if titem is not None and titem.text().strip() == ftype:
-                self.feature_table.selectRow(row)
-                self.feature_table.scrollToItem(titem)
-                break
-
-    # ---- 人工确认（红灯必须，黄灯可选）----
+    # ---- 人工确认（红灯必须，黄灯可选；确认针对当前序列，作用于其采纳的 variant）----
     def _manual_confirm(self):
         sid = self.current
         if not sid:
             return
-        res = self.win.results.get(sid)
+        res = self._viewed_result(sid)
         if res is None:
             return
         if res.status == "green":
@@ -499,7 +597,7 @@ class PageReview(QWidget):
 
     def _reference_features_text(self):
         """参考记录自身的五列 feature table（不含 source，只读对照用）。"""
-        res = self.win.results.get(self.current) if self.current else None
+        res = self._viewed_result(self.current) if self.current else None
         if res is None or res.detail is None:
             return None
         d = res.detail
@@ -514,12 +612,12 @@ class PageReview(QWidget):
                                     "The current result lacks alignment context (loaded from "
                                     "a project file). Re-annotate in step 2 first.")
             return
-        acc = self.win.results[self.current].provenance.reference or "reference"
+        acc = self._viewed_result(self.current).provenance.reference or "reference"
         dlg = AlignmentDialog(f"Reference features - {acc}", text, self)
         dlg.exec()
 
     def _show_alignment(self):
-        res = self.win.results.get(self.current) if self.current else None
+        res = self._viewed_result(self.current) if self.current else None
         if res is None or res.detail is None:
             QMessageBox.information(self, "No alignment",
                                     "Missing alignment context (annotate in this session first).")

@@ -52,15 +52,17 @@ def test_steps_laid_out_horizontally(qtbot, window):
 
 
 def test_icon_toolbar_replaced_by_menu_bar(window):
-    """原图标工具栏（New/Open/Save/Settings/Log）改为文字菜单栏。"""
+    """原图标工具栏（New/Open/Save/Settings/Log）改为文字菜单栏；
+    后精简为 Settings / Guide / About 三个直接动作（点击即执行，无子菜单）。"""
     from PyQt6.QtWidgets import QToolBar
 
     assert window.findChildren(QToolBar) == []
-    labels = [a.text() for a in window.menuBar().actions()]
-    assert labels == ["&File", "&Tools"]
-    file_items = [a.text() for a in window.menuBar().actions()[0].menu().actions()
-                  if a.text()]
-    assert file_items == ["New Project", "Open Project...", "Save Project...", "Exit"]
+    actions = window.menuBar().actions()
+    assert [a.text() for a in actions] == ["Settings", "Guide", "About"]
+    assert all(a.menu() is None for a in actions)          # 直接动作，无下拉
+    acts = {a.text(): a for a in actions}
+    assert acts["Settings"].shortcut().toString() == "Ctrl+,"
+    assert acts["Guide"].shortcut().toString() == "F1"
 
 
 def test_log_dock_removed_status_bar_summarises(window):
@@ -93,22 +95,31 @@ def test_step_nav_states_and_locking(window):
 
     assert window._step_states() == [False, False, False, False]
     assert window._step_locked(1)[0]                    # 初始全锁
+    assert "no sequences" in window.nav.item(1).toolTip()   # 锁定原因悬停可见
 
     window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 100, gene_type="tef1"))
     window.go_page(0)
     assert window._step_states()[0] is False            # 有序列但无 hits
     assert window._step_locked(1)[0]                    # Reference 仍锁
+    assert "BLAST hits" in window.nav.item(1).toolTip() # 原因随状态细化
 
     window.hits["s1"] = [BlastHit(accession="AA000001", title="hit", pident=99.0,
                                   qcovs=100.0, subject_len=100, flags={})]
     assert window._step_states()[0] is True
     assert not window._step_locked(1)[0]                # Reference 解锁
     assert window._step_locked(2)[0]                    # Review 仍锁（未注释）
+    window._refresh_nav()
+    assert window.nav.item(1).toolTip() == ""           # 解锁后提示清空
+    assert "annotation" in window.nav.item(2).toolTip()
 
-    window.results["s1"] = SimpleNamespace(status="red")
+    window.results["s1"] = {"REF00001.1": SimpleNamespace(status="red")}
+    window._refresh_nav()
     assert window._step_locked(3)[0]                    # 红灯未确认 → Export 锁
+    assert "reviewed" in window.nav.item(3).toolTip()
     window.confirmed["s1"] = True
     assert not window._step_locked(3)[0]                # 确认后 Export 解锁
+    window._refresh_nav()
+    assert window.nav.item(3).toolTip() == ""
 
     assert "▶" in window.nav.item(0).text()
 
@@ -136,7 +147,7 @@ def test_blast_failure_drain_jumps(window):
     window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
     window.page_import.progress.setMaximum(1)
     window._blast_pending = 1
-    window._on_blast_failed(0, "s1", "boom")     # gen 0 == 当前批次
+    window._on_blast_failed(0, "s1", "", "boom")     # gen 0 == 当前批次
     assert window._blast_pending == 0
     assert window.stack.currentIndex() == 1
     assert not window.page_import.b_stop.isEnabled()
@@ -152,7 +163,7 @@ def test_blast_success_drain_jumps(window):
     window._blast_pending = 1
     hit = BlastHit(accession="AA000001", title="hit", pident=99.0,
                    qcovs=100.0, subject_len=100, flags={})
-    window._on_blast_finished(0, "s1", [hit])
+    window._on_blast_finished(0, "s1", "", [hit])
     assert window._blast_pending == 0
     assert window.hits["s1"] == [hit]
     assert window.stack.currentIndex() == 1
@@ -168,7 +179,7 @@ def test_blast_finish_after_discard_stays_put(window):
     window.page_import.progress.setMaximum(1)
     window._blast_pending = 1
     window.sequences.clear()               # 模拟运行中 New/Clear（绕过 QMessageBox）
-    window._on_blast_finished(0, "s1", [BlastHit(accession="AA000001", title="hit",
+    window._on_blast_finished(0, "s1", "", [BlastHit(accession="AA000001", title="hit",
                                                  pident=99.0, qcovs=100.0,
                                                  subject_len=100, flags={})])
     assert window._blast_pending == 0
@@ -224,7 +235,7 @@ def test_annotate_and_review(window, ref_record_seq, ref_gb_text):
                                                     "country": "China"}))
     res = annotate_sequence(window.sequences[0], window.make_config(),
                             reference_gb_text=ref_gb_text)
-    window.results["u1"] = res
+    window.results["u1"] = {"REF00001.1": res}
 
     page = window.page_review
     page.refresh()
@@ -234,7 +245,7 @@ def test_annotate_and_review(window, ref_record_seq, ref_gb_text):
     # P4 编辑重验：不加改动重验，状态应保持
     page.current = "u1"
     page._auto_revalidate()
-    assert window.results["u1"].status == res.status
+    assert window.results["u1"]["REF00001.1"].status == res.status
 
 
 def test_review_edit_revalidate_detects_error(window, ref_record_seq, ref_gb_text):
@@ -249,7 +260,7 @@ def test_review_edit_revalidate_detects_error(window, ref_record_seq, ref_gb_tex
                                                     "country": "China"}))
     res = annotate_sequence(window.sequences[0], window.make_config(),
                             reference_gb_text=ref_gb_text)
-    window.results["u2"] = res
+    window.results["u2"] = {"REF00001.1": res}
     page = window.page_review
     page.refresh()
     page.current = "u2"
@@ -260,8 +271,9 @@ def test_review_edit_revalidate_detects_error(window, ref_record_seq, ref_gb_tex
                if page.feature_table.item(r, 0).text() == "CDS")
     page.feature_table.item(row, 2).setText("1..300, 401..99999")
     page._auto_revalidate()
-    assert window.results["u2"].status == "red"
-    assert any(i.code == "coord_out_of_range" for i in window.results["u2"].issues)
+    assert window.results["u2"]["REF00001.1"].status == "red"
+    assert any(i.code == "coord_out_of_range"
+               for i in window.results["u2"]["REF00001.1"].issues)
 
 
 def test_project_save_load_roundtrip(window, tmp_path, ref_record_seq, ref_gb_text):
@@ -274,18 +286,19 @@ def test_project_save_load_roundtrip(window, tmp_path, ref_record_seq, ref_gb_te
                                  source_qualifiers={"organism": "F. t"}))
     res = annotate_sequence(window.sequences[0], window.make_config(),
                             reference_gb_text=ref_gb_text)
-    window.results["p1"] = res
+    window.results["p1"] = {"REF00001.1": res}
     window.confirmed["p1"] = True       # 红灯确认与导出标记必须跨会话保留
     window.exported = True
     path = str(tmp_path / "proj.json")
-    save_project(path, window.sequences, window.hits, window.selected_ref,
+    save_project(path, window.sequences, window.hits, window.selected_refs,
                  window.results, window.settings,
                  confirmed=window.confirmed, exported=window.exported)
-    (sequences, hits, selected_ref, results, settings,
-     confirmed, exported) = load_project(path)
+    (sequences, hits, selected_refs, results, settings,
+     confirmed, exported, chosen_ref) = load_project(path)
     assert [s.seq_id for s in sequences] == ["p1"]
-    assert results["p1"].status == res.status
-    assert results["p1"].tbl_text == res.tbl_text
+    assert chosen_ref == {"p1": "REF00001.1"}
+    assert results["p1"]["REF00001.1"].status == res.status
+    assert results["p1"]["REF00001.1"].tbl_text == res.tbl_text
     assert confirmed == {"p1": True}
     assert exported is True
 
@@ -344,7 +357,7 @@ def test_reference_features_text(window, ref_record_seq, ref_gb_text):
     seq, _ = ref_record_seq
     res = annotate_sequence(SeqInput(seq_id="a", seq=seq[300:1600], gene_type="tef1"),
                             window.make_config(), reference_gb_text=ref_gb_text)
-    window.results["a"] = res
+    window.results["a"] = {"REF00001.1": res}
     window.page_review.current = "a"
     text = window.page_review._reference_features_text()
     assert text is not None
@@ -383,7 +396,7 @@ def test_import_box_flow(window):
     window.hits["g1"] = hit                        # 防止真实网络请求
     window.settings["email"] = "a@example.org"
     window.page_import.refresh()
-    assert window.page_import.lbl_count.text() == "1 sequence(s) imported"
+    assert window.page_import.b_blast.isEnabled()
 
     box = window.page_import.import_box
     box.setPlainText(">s9\nACGTACGTACGT")
@@ -496,11 +509,11 @@ def test_loaded_project_reexports_without_crash(window, tmp_path, ref_record_seq
                  source_qualifiers={"organism": "F. t", "country": "China"})
     res = annotate_sequence(s, window.make_config(), reference_gb_text=ref_gb_text)
     path = str(tmp_path / "p.json")
-    save_project(path, [s], {}, {}, {"u4": res}, {})
+    save_project(path, [s], {}, {}, {"u4": {"REF00001.1": res}}, {})
     (sequences, _hits, _sel, results, _st,
-     _confirmed, _exported) = load_project(path)
+     _confirmed, _exported, _chosen) = load_project(path)
 
-    lite = results["u4"]
+    lite = results["u4"]["REF00001.1"]
     assert [f.ftype for f in lite.features] == ["gene", "CDS"]  # feature 已恢复
     assert set(lite.report_row()) == set(res.report_row())                # 报告行同构
     assert lite.report_row()["n_features"] == 2
@@ -538,8 +551,9 @@ def test_hit_table_title_tooltip_wrapped(qtbot):
     assert table.item(1, 1).toolTip() == ""                   # 短标题不设冗余提示
 
 
-def test_reference_row_radio_default_and_pick(window):
-    """Phase 2 简化：命中表每行单选框，默认第一行（推荐），点选即生效。"""
+def test_reference_row_multi_select_default_and_toggle(window):
+    """多参考对比：命中表每行复选框，默认勾前 N（default_refs=3，命中 2 条 → 全选）；
+    勾选即生效；至少保留 1 个。"""
     from fungal_annot.core.blast_runner import BlastHit
     from fungal_annot.core.models import SeqInput
 
@@ -554,19 +568,42 @@ def test_reference_row_radio_default_and_pick(window):
     page.refresh()
     page.seq_list.setCurrentRow(0)
 
-    # 默认选中第一行（推荐），且选择即写入状态
-    assert window.selected_ref["r1"] == "AA000001"
+    # 默认勾前 N（默认 3 > 命中数 2 → 全选，按排名序）
+    assert window.selected_refs["r1"] == ["AA000001", "AA000002"]
     assert page.b_annotate.isEnabled()
-    # Reference choice 区域已删：直接输入 accession 的入口不存在
-    assert not hasattr(page, "lbl_choice") and not hasattr(page, "accession_edit")
-    # 点第二行的单选框 → 选择切换
-    page.hit_table._radios[1].setChecked(True)
-    assert window.selected_ref["r1"] == "AA000002"
-    # 单选互斥：第一行已取消勾选
-    assert not page.hit_table._radios[0].isChecked()
-    # Use recommended for all → 回到第一行
-    page._use_recommended_all()
-    assert window.selected_ref["r1"] == "AA000001"
+    # 取消第二个 → 只剩第一个
+    page.hit_table._checks[1].setChecked(False)
+    assert window.selected_refs["r1"] == ["AA000001"]
+    # 至少保留 1 个：取消最后一个被拒绝，勾选状态回滚
+    page.hit_table._checks[0].setChecked(False)
+    assert window.selected_refs["r1"] == ["AA000001"]
+    assert page.hit_table._checks[0].isChecked()
+    # 再勾上第二个 → 恢复两个
+    page.hit_table._checks[1].setChecked(True)
+    assert window.selected_refs["r1"] == ["AA000001", "AA000002"]
+    # "Use recommended for all" 按钮已移除：默认勾选逻辑在 refresh() 中，兜底由
+    # View match 清空回落承担（test_enter_accessions_applies_values 覆盖）
+
+
+def test_reference_multi_select_limit_five(window):
+    """上限 5：勾第 6 个被拒绝并回滚（日志提示），其余勾选不受影响。"""
+    from fungal_annot.core.blast_runner import BlastHit
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="r2", seq="ACGT" * 60, gene_type="tef1"))
+    window.hits["r2"] = [BlastHit(accession=f"AB{i:06d}", title=f"hit {i}",
+                                  pident=99.0, qcovs=100.0, subject_len=60, flags={})
+                         for i in range(6)]
+    page = window.page_reference
+    page.refresh()
+    page.seq_list.setCurrentRow(0)
+    assert window.selected_refs["r2"] == [f"AB{i:06d}" for i in range(3)]  # 默认前 3
+    for i in range(3, 6):
+        page.hit_table._checks[i].setChecked(True)
+    assert window.selected_refs["r2"] == [f"AB{i:06d}" for i in range(5)]
+    page.hit_table._checks[5].setChecked(True)      # 第 6 个 → 拒绝
+    assert window.selected_refs["r2"] == [f"AB{i:06d}" for i in range(5)]
+    assert not page.hit_table._checks[5].isChecked()  # 勾选回滚
 
 
 def test_start_annotation_button_flow(qtbot, window, ref_record_seq, ref_gb_text, monkeypatch):
@@ -583,14 +620,14 @@ def test_start_annotation_button_flow(qtbot, window, ref_record_seq, ref_gb_text
                                   pident=99.0, qcovs=100.0, subject_len=2000, flags={})]
     monkeypatch.setattr("fungal_annot.services.pipeline.fetch_gb_text",
                         lambda accession, **kw: (ref_gb_text, "full"))
-    window.page_reference.refresh()          # 自动选中推荐 → selected_ref 就绪
+    window.page_reference.refresh()          # 自动勾选前 N → selected_refs 就绪
     window.page_reference.seq_list.setCurrentRow(0)
 
     window.page_reference._start_annotate()  # 真实按钮处理器（含队列提交）
     assert window._annotate_pending == 1
     qtbot.waitUntil(lambda: "u1" in window.results, timeout=60000)
     qtbot.waitUntil(lambda: window._annotate_pending <= 0, timeout=60000)
-    assert window.results["u1"].status in ("green", "yellow")
+    assert window.results["u1"]["REF00001.1"].status in ("green", "yellow")
     assert window.stack.currentIndex() == 2  # 完成后自动进入审核页（4 步向导）
 
 
@@ -649,12 +686,12 @@ def test_rename_sequence_moves_stores_and_result(window):
 
     window.add_sequence(SeqInput(seq_id="old", seq="ACGT" * 5))
     window.hits["old"] = []
-    window.results["old"] = SimpleNamespace(seq_id="old", status="green")
+    window.results["old"] = {"REF00001.1": SimpleNamespace(seq_id="old", status="green")}
     window.confirmed["old"] = True
     window.rename_sequence("old", "new")
     assert window.sequences[0].seq_id == "new"
     assert "new" in window.hits and "old" not in window.hits
-    assert window.results["new"].seq_id == "new"
+    assert window.results["new"]["REF00001.1"].seq_id == "new"
     assert window.confirmed.get("new") is True
 
 
@@ -667,8 +704,8 @@ def test_review_auto_revalidate_on_edit(window, qtbot, ref_record_seq, ref_gb_te
     window.add_sequence(SeqInput(seq_id="u2", seq=seq[300:1600], gene_type="tef1",
                                  source_qualifiers={"organism": "F. t",
                                                     "country": "China"}))
-    window.results["u2"] = annotate_sequence(window.sequences[0], window.make_config(),
-                                             reference_gb_text=ref_gb_text)
+    window.results["u2"] = {"REF00001.1": annotate_sequence(
+        window.sequences[0], window.make_config(), reference_gb_text=ref_gb_text)}
     page = window.page_review
     page.refresh()
     page.current = "u2"
@@ -676,13 +713,14 @@ def test_review_auto_revalidate_on_edit(window, qtbot, ref_record_seq, ref_gb_te
     row = next(r for r in range(page.feature_table.rowCount())
                if page.feature_table.item(r, 0).text() == "CDS")
     page.feature_table.item(row, 2).setText("1..300, 401..99999")
-    qtbot.waitUntil(lambda: window.results["u2"].status == "red", timeout=5000)
-    assert any(i.code == "coord_out_of_range" for i in window.results["u2"].issues)
+    qtbot.waitUntil(lambda: window.results["u2"]["REF00001.1"].status == "red", timeout=5000)
+    assert any(i.code == "coord_out_of_range" for i in window.results["u2"]["REF00001.1"].issues)
 
-    # 非法坐标：行内提示、不弹窗、上次结果保留
+    # 非法坐标：状态栏提示（不弹窗）、上次结果保留
     page.feature_table.item(row, 2).setText("garbage")
-    qtbot.waitUntil(lambda: page.lbl_status.text().startswith("⚠"), timeout=5000)
-    assert window.results["u2"].status == "red"
+    qtbot.waitUntil(lambda: window.statusBar().currentMessage().startswith("⚠"),
+                    timeout=5000)
+    assert window.results["u2"]["REF00001.1"].status == "red"
 
 
 def test_feature_add_and_delete_row(window, qtbot, ref_record_seq, ref_gb_text):
@@ -694,8 +732,8 @@ def test_feature_add_and_delete_row(window, qtbot, ref_record_seq, ref_gb_text):
     window.add_sequence(SeqInput(seq_id="u3", seq=seq[300:1600], gene_type="tef1",
                                  source_qualifiers={"organism": "F. t",
                                                     "country": "China"}))
-    window.results["u3"] = annotate_sequence(window.sequences[0], window.make_config(),
-                                             reference_gb_text=ref_gb_text)
+    window.results["u3"] = {"REF00001.1": annotate_sequence(
+        window.sequences[0], window.make_config(), reference_gb_text=ref_gb_text)}
     page = window.page_review
     page.refresh()
     page.current = "u3"
@@ -724,8 +762,8 @@ def test_feature_add_and_delete_row(window, qtbot, ref_record_seq, ref_gb_text):
                     timeout=5000)
 
 
-def test_issue_click_opens_glossary(window, qtbot, monkeypatch):
-    """带术语卡的 issue（low_identity 等）点击弹出解释卡。"""
+def test_issue_details_in_results_tooltip(window):
+    """Issues 列表已并入结果列表：Issues 列悬停可见完整问题（级别 + 信息 + 建议）。"""
     from fungal_annot.core.models import Issue, Provenance, SeqInput
     from fungal_annot.services.pipeline import SeqResult
 
@@ -733,18 +771,21 @@ def test_issue_click_opens_glossary(window, qtbot, monkeypatch):
     res = SeqResult(seq_id="u4", status="red",
                     issues=[Issue("error", "low_identity", "identity 90% < threshold")],
                     provenance=Provenance())
-    window.results["u4"] = res
+    window.results["u4"] = {"REF00001.1": res}
     page = window.page_review
     page.refresh()
     page.current = "u4"
     page.load_result("u4")
-    shown = []
-    # page_review 里是 `from ..widgets.help import show_help`，须 patch 其模块引用
-    monkeypatch.setattr("fungal_annot.ui.pages.page_review.show_help",
-                        lambda term, parent=None: shown.append(term))
-    item = page.issue_list.item(0)
-    page._on_issue_clicked(item)
-    assert shown == ["identity"]
+    item = page.variant_table.item(0, 3)
+    assert item.text().startswith("1")              # 计数 + 级别细分
+    tip = item.toolTip()
+    assert "Error: identity 90% < threshold" in tip
+    assert "accept it knowingly" in tip or "closer" in tip   # HINTS 建议动作
+    # 清空问题 → tooltip 为空
+    res.issues = []
+    res.status = "green"
+    page.load_result("u4")
+    assert page.variant_table.item(0, 3).toolTip() == ""
 
 
 def test_accession_dialog_layout(window):
@@ -756,7 +797,7 @@ def test_accession_dialog_layout(window):
 
     window.add_sequence(SeqInput(seq_id="d1", seq="ACGT" * 10))
     window.add_sequence(SeqInput(seq_id="d2", seq="ACGT" * 10))
-    dlg = AccessionDialog(window.sequences, {"d2": "MZ123456.1"}, window)
+    dlg = AccessionDialog(window.sequences, {"d2": ["MZ123456.1"]}, window)
     assert dlg.table.rowCount() == 2
     assert dlg.table.item(0, 0).text() == "d1"
     assert dlg.table.item(0, 1).text() == ""            # 无选择 → 空白
@@ -778,7 +819,7 @@ def test_enter_accessions_applies_values(window, monkeypatch):
                                      qcovs=100.0, subject_len=60, flags={})]
     page = window.page_reference
     page.refresh()
-    assert window.selected_ref["m2"] == "AA000001"       # refresh 自动取推荐
+    assert window.selected_refs["m2"] == ["AA000001"]       # refresh 自动取前 N 推荐
 
     class StubDialog:
         def __init__(self, sequences, current, parent=None):
@@ -789,17 +830,17 @@ def test_enter_accessions_applies_values(window, monkeypatch):
             return {"m1": "MZ123456.1", "m2": ""}        # m2 清空 → 回落推荐
     monkeypatch.setattr(pr_mod, "AccessionDialog", StubDialog)
     page._enter_accessions()
-    assert window.selected_ref["m1"] == "MZ123456.1"     # 手填覆盖
-    assert window.selected_ref["m2"] == "AA000001"       # 清空 → 回落推荐
+    assert window.selected_refs["m1"] == ["MZ123456.1"]     # 手填覆盖
+    assert window.selected_refs["m2"] == ["AA000001"]       # 清空 → 回落推荐
 
     # 取消（Rejected）→ 不应用
     class StubCancel(StubDialog):
         def exec(self):
             return pr_mod.QDialog.DialogCode.Rejected
     monkeypatch.setattr(pr_mod, "AccessionDialog", StubCancel)
-    window.selected_ref["m1"] = "AA000001"
+    window.selected_refs["m1"] = ["AA000001"]
     page._enter_accessions()
-    assert window.selected_ref["m1"] == "AA000001"
+    assert window.selected_refs["m1"] == ["AA000001"]
 
 
 def test_review_status_wording_and_confirm(window, ref_record_seq, ref_gb_text, monkeypatch):
@@ -812,22 +853,19 @@ def test_review_status_wording_and_confirm(window, ref_record_seq, ref_gb_text, 
     seq, _ = ref_record_seq
     window.add_sequence(SeqInput(seq_id="w1", seq=seq[300:1600], gene_type="tef1",
                                  source_qualifiers={"organism": "F. t", "country": "China"}))
-    window.results["w1"] = annotate_sequence(window.sequences[0], window.make_config(),
-                                             reference_gb_text=ref_gb_text)
+    window.results["w1"] = {"REF00001.1": annotate_sequence(
+        window.sequences[0], window.make_config(), reference_gb_text=ref_gb_text)}
     page = window.page_review
     page.refresh()
     page.current = "w1"
     page.load_result("w1")
-    status = window.results["w1"].status
+    status = window.results["w1"]["REF00001.1"].status
     if status == "red":
-        assert "Needs review" in page.lbl_status.text()
         assert page.b_confirm.text() == "Confirm for export (required)"
         assert page.b_confirm.isEnabled()
     elif status == "yellow":
-        assert "Ready" in page.lbl_status.text()
         assert page.b_confirm.text() == "Confirm for export (optional)"
     else:
-        assert page.lbl_status.text() == "w1: Ready"
         assert not page.b_confirm.isEnabled()
 
     # 确认（黄/红）→ 按钮变为已确认并禁用；绿灯本就无需确认
@@ -838,58 +876,14 @@ def test_review_status_wording_and_confirm(window, ref_record_seq, ref_gb_text, 
         assert window.confirmed["w1"] is True
         assert page.b_confirm.text().startswith("Confirmed")
         assert not page.b_confirm.isEnabled()
-        assert "manually confirmed" in page.lbl_status.text()
 
     # 列表标记用新文案
     item_text = page.seq_list.item(0).text()
     assert any(m in item_text for m in ("✓ Ready", "⚠ Warnings", "✗ Needs review"))
-    # 图例链接与 Re-check all 就位
-    assert "What do the colors mean?" in page.lbl_legend.text()
+    # Re-check all 已从界面移除，但重查逻辑保留（批量重验入口被测试直接调用）
     page._recheck_all()
     assert "Re-checked" in window.statusBar().currentMessage()
 
-
-def test_review_issues_hidden_when_clean(window, ref_record_seq, ref_gb_text, monkeypatch):
-    """全绿时 Issues 区隐藏（不再撑一个大空框）；红灯时显示且点击跳转 feature 行。"""
-    from PyQt6.QtWidgets import QInputDialog
-
-    from fungal_annot.core.models import Issue, SeqInput
-    from fungal_annot.services.pipeline import annotate_sequence
-
-    seq, _ = ref_record_seq
-    window.add_sequence(SeqInput(seq_id="g1", seq=seq[300:1600], gene_type="tef1",
-                                 source_qualifiers={"organism": "F. t", "country": "China"}))
-    res = annotate_sequence(window.sequences[0], window.make_config(),
-                            reference_gb_text=ref_gb_text)
-    monkeypatch.setattr(QInputDialog, "getText",
-                        staticmethod(lambda *a, **k: ("", True)))
-    if res.status != "green":
-        window.confirmed["g1"] = True
-    window.results["g1"] = res
-    page = window.page_review
-    page.refresh()
-    page.current = "g1"
-    page.load_result("g1")
-
-    # 构造红灯：加一条 error issue → Issues 区可见
-    res.issues = [Issue("error", "cds_phase", "CDS is not marked partial at the 3' end")]
-    res.status = "red"
-    page.load_result("g1")
-    assert page.lbl_issues.isVisibleTo(page) and page.issue_list.isVisibleTo(page)
-    assert any("Error:" in page.issue_list.item(i).text()
-               for i in range(page.issue_list.count()))
-    # 点击 issue → 跳到 CDS 行
-    page._on_issue_clicked(page.issue_list.item(0))
-    selected = {i.row() for i in page.feature_table.selectedIndexes()}
-    types = {page.feature_table.item(r, 0).text() for r in selected}
-    assert "CDS" in types
-
-    # 回到全绿 → Issues 区隐藏
-    res.issues = []
-    res.status = "green"
-    page.load_result("g1")
-    assert not page.lbl_issues.isVisibleTo(page)
-    assert not page.issue_list.isVisibleTo(page)
 
 
 def test_export_page_writes_tbl_only(window, tmp_path, ref_record_seq, ref_gb_text, monkeypatch):
@@ -901,8 +895,8 @@ def test_export_page_writes_tbl_only(window, tmp_path, ref_record_seq, ref_gb_te
 
     seq, _ = ref_record_seq
     window.add_sequence(SeqInput(seq_id="e1", seq=seq[300:1600], gene_type="tef1"))
-    window.results["e1"] = annotate_sequence(window.sequences[0], window.make_config(),
-                                             reference_gb_text=ref_gb_text)
+    window.results["e1"] = {"REF00001.1": annotate_sequence(
+        window.sequences[0], window.make_config(), reference_gb_text=ref_gb_text)}
     page = window.page_export
     page.refresh()
     out = tmp_path / "only_tbl"
@@ -932,7 +926,7 @@ def test_recheck_preserves_pipeline_issues(window, ref_record_seq, ref_gb_text):
                                  source_qualifiers={"organism": "F. t", "country": "China"}))
     res = annotate_sequence(window.sequences[0], window.make_config(),
                             reference_gb_text=ref_gb_text)
-    window.results["b1"] = res
+    window.results["b1"] = {"REF00001.1": res}
     # 模拟迁移期 warning（正常由 transfer_features 产生并进入 base_issues）
     transfer_issue = Issue("warning", "exon_outside_aligned",
                            "CDS: 1 segment(s) outside the query-covered region")
@@ -945,14 +939,14 @@ def test_recheck_preserves_pipeline_issues(window, ref_record_seq, ref_gb_text):
     page.current = "b1"
     page.load_result("b1")
     page._recheck_all()
-    codes = {i.code for i in window.results["b1"].issues}
+    codes = {i.code for i in window.results["b1"]["REF00001.1"].issues}
     assert "exon_outside_aligned" in codes            # 重查后仍在
-    assert window.results["b1"].status == "yellow"    # 不会黄变绿
+    assert window.results["b1"]["REF00001.1"].status == "yellow"    # 不会黄变绿
 
     # 自动重验（编辑路径）同样保留
     page.feature_table.item(0, 3).setText(page.feature_table.item(0, 3).text() + " ")
     page._auto_revalidate()
-    codes = {i.code for i in window.results["b1"].issues}
+    codes = {i.code for i in window.results["b1"]["REF00001.1"].issues}
     assert "exon_outside_aligned" in codes
 
 
@@ -984,6 +978,27 @@ def test_page_help_buttons_and_guides(window):
         html = PAGE_HELP[term][1]
         assert "How to use" in html and "Terms" in html and "Tips" in html
         assert must_have in html
+
+
+def test_app_guide_term_and_about_dialogs(window):
+    """菜单 Guide/F1 是全软件使用指南（非单页）：四步流程、设置、状态规则、
+    提交路径齐备；术语词条与 About 弹窗走统一样式外壳，均可构建。"""
+    from PyQt6.QtWidgets import QDialog
+
+    from fungal_annot.ui.widgets.help import (APP_GUIDE, build_about_dialog,
+                                              build_app_guide_dialog,
+                                              build_term_help_dialog)
+
+    dlg = build_app_guide_dialog(window)
+    assert dlg.windowTitle() == "User Guide"
+    body = APP_GUIDE[1]
+    for must in ("Import", "Select Reference", "Review Annotation",
+                 "Export Results", "BankIt", "F1", "Ctrl+,", "Ready"):
+        assert must in body, must
+    # 术语词条与 About 也能构建（统一样式外壳，均为 QDialog）
+    assert build_term_help_dialog("codon_start", window).windowTitle() == "codon_start"
+    about = build_about_dialog("9.9.9", window)
+    assert isinstance(about, QDialog) and about.windowTitle() == "About"
 
 
 # ---- 队列生命周期修复回归（2026-09-29：STOP 取消 / 失败对称 / 项目切换作废）----
@@ -1025,7 +1040,7 @@ def test_annotate_failure_drains_queue(window):
     要求序列仍存在才递减，删除序列 + 失败会让界面永久卡死）。"""
     window.page_reference.progress.setMaximum(1)
     window._annotate_pending = 1
-    window._on_annotate_failed(0, "s1", "boom")
+    window._on_annotate_failed(0, "s1", "REF00001.1", "boom")
     assert window._annotate_pending == 0
 
 
@@ -1058,7 +1073,7 @@ def test_abandon_queues_ignores_late_callbacks(window):
     window._abandon_queues()
     assert window._blast_pending == 0
     stale_gen = window.blast_queue.gen - 1
-    window._on_blast_finished(stale_gen, "s1",
+    window._on_blast_finished(stale_gen, "s1", "",
                               [BlastHit(accession="AA000001", title="hit", pident=99.0,
                                         qcovs=100.0, subject_len=60, flags={})])
     assert "s1" not in window.hits
@@ -1080,7 +1095,7 @@ def test_late_annotate_result_for_removed_sequence_dropped(window, ref_record_se
     window.page_reference.progress.setMaximum(1)
     window._annotate_pending = 1
     window.sequences.clear()               # 模拟注释运行中删除该序列
-    window._on_annotate_finished(0, "u9", res)
+    window._on_annotate_finished(0, "u9", "REF00001.1", res)
     assert "u9" not in window.results
     assert window._annotate_pending == 0
 
@@ -1120,3 +1135,95 @@ def test_review_refresh_preserves_selection(window):
     page.refresh()                                  # Re-check all / 确认后都会走这里
     assert page.seq_list.currentRow() == 2
     assert page.current == "rv3"
+
+
+# ---- 多参考对比（2026-09-29）：1-5 参考 → 对比 → 采纳其一 → 导出 ----
+
+def test_multi_reference_compare_adopt_and_export(qtbot, window, tmp_path,
+                                                  ref_record_seq, ref_gb_text,
+                                                  partial_ref_gb, monkeypatch):
+    """端到端：同一序列对两个参考各注释一次 → 对比表两行 → 采纳第二个 →
+    导出只写采纳者（m1.tbl）。"""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from fungal_annot.core.models import SeqInput
+
+    seq, _ = ref_record_seq
+    window.add_sequence(SeqInput(seq_id="m1", seq=seq[300:1600], gene_type="tef1",
+                                 source_qualifiers={"organism": "F. t",
+                                                    "country": "China"}))
+    window.selected_refs["m1"] = ["REF00001.1", "REF00002.1"]
+    refs = {"REF00001.1": ref_gb_text, "REF00002.1": partial_ref_gb}
+    monkeypatch.setattr("fungal_annot.services.pipeline.fetch_gb_text",
+                        lambda accession, **kw: (refs[accession], "full"))
+
+    window.start_annotation()                        # （序列 × 参考）成对提交
+    assert window._annotate_pending == 2
+    qtbot.waitUntil(lambda: window._annotate_pending <= 0, timeout=60000)
+    variants = window.results["m1"]
+    assert set(variants) == {"REF00001.1", "REF00002.1"}
+    assert window.chosen_accession("m1") in variants  # 首个返回者默认采纳
+
+    page = window.page_review
+    page.refresh()
+    page.seq_list.setCurrentRow(0)
+    assert page.variant_table.rowCount() == 2         # 对比表每个参考一行
+    # 采纳另一个 variant（Adopt）
+    other = "REF00002.1" if window.chosen_accession("m1") == "REF00001.1" else "REF00001.1"
+    page._adopt(other)
+    assert window.chosen_accession("m1") == other
+    assert page.variant_table.cellWidget(
+        next(r for r in range(page.variant_table.rowCount())
+             if page.variant_table.item(r, 0).text() == other), 4).isChecked()
+
+    # 导出：默认只写采纳者（文件名仍为 <seq_id>.tbl，BankIt 就绪）
+    monkeypatch.setattr(QMessageBox, "information",
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
+    window.confirmed["m1"] = True                     # 绕开红灯拦截（若有）
+    page_export = window.page_export
+    page_export.refresh()
+    out = tmp_path / "out"
+    page_export.dir_edit.setText(str(out))
+    page_export._export()
+    assert sorted(p.name for p in out.iterdir()) == ["m1.tbl"]
+    assert window.exported is True
+
+
+def test_review_inline_issues_hint(window):
+    """审核页行内问题提示：error/warning 直接可见并附建议动作（点破移码），绿灯隐藏。"""
+    from fungal_annot.core.models import Issue, SeqInput
+    from fungal_annot.services.pipeline import SeqResult
+
+    window.add_sequence(SeqInput(seq_id="vis1", seq="ACGT" * 30, gene_type="tef1"))
+    res = SeqResult(seq_id="vis1", status="red",
+                    issues=[Issue("error", "internal_stop",
+                                  "CDS translation contains an internal stop codon")])
+    window.results["vis1"] = {"REF00001.1": res}
+    window.chosen_ref["vis1"] = "REF00001.1"
+    page = window.page_review
+    page.refresh()
+    assert not page.lbl_issues.isHidden()
+    assert "internal stop" in page.lbl_issues.text()
+    assert "frameshift" in page.lbl_issues.text()          # 建议动作点破移码原因
+
+    window.results["vis1"] = {"REF00001.1": SeqResult(seq_id="vis1", status="green")}
+    page.load_result("vis1")
+    assert page.lbl_issues.isHidden()                      # 绿灯不显示提示
+
+
+def test_annotate_pair_accounting(window):
+    """1 条序列 × 2 个参考：pending 按 pair 计数，结果分别按 ref_key 落账。"""
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import SeqResult
+
+    window.add_sequence(SeqInput(seq_id="p2", seq="ACGT" * 30, gene_type="tef1"))
+    window.selected_refs["p2"] = ["REF00001.1", "REF00002.1"]
+    window.page_reference.progress.setMaximum(2)
+    window._annotate_pending = 2                     # 手动置为在途（同既有测试做法）
+    window._on_annotate_finished(0, "p2", "REF00001.1", SeqResult(seq_id="p2"))
+    assert window._annotate_pending == 1
+    assert set(window.results["p2"]) == {"REF00001.1"}
+    window._on_annotate_finished(0, "p2", "REF00002.1",
+                                 SeqResult(seq_id="p2", status="yellow"))
+    assert window._annotate_pending == 0
+    assert set(window.results["p2"]) == {"REF00001.1", "REF00002.1"}

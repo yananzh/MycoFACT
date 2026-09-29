@@ -23,8 +23,9 @@ def load_fasta(path: str) -> list[SeqInput]:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
-        prog="fungal-annot",
-        description="Fungal multi-locus feature table generator (reference annotation transfer)")
+        prog="mycofact",
+        description="MycoFACT - fungal feature annotation & comparison tool "
+                    "(reference annotation transfer)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="FASTA -> annotation transfer -> .tbl/.fsa + validation report")

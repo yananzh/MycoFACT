@@ -246,8 +246,12 @@ def _unique_path(out_dir: str, stem: str, ext: str, used: set[str]) -> str:
 
 def write_outputs(results: list[SeqResult], out_dir: str,
                   seq_inputs: list[SeqInput] | None = None,
-                  with_fsa: bool = True, with_report: bool = True) -> list[str]:
+                  with_fsa: bool = True, with_report: bool = True,
+                  stems: list[str] | None = None) -> list[str]:
     """写出 .tbl（每条序列一个）与可选的 .fsa / 验证报告 CSV，返回文件路径列表。
+
+    stems 与 results 对齐的文件名主干覆盖（多参考对比导出未采纳 variant 时用
+    "<seq_id>__<accession>"）；缺省取 _safe_stem(seq_id)。
 
     BankIt 门户模式（GB2sequin 同款工作流）：.tbl 只含 gene/CDS 等 feature，
     不含 source——organism 与来源修饰符在门户表单采集（§7.2 P1/P5）。
@@ -259,7 +263,7 @@ def write_outputs(results: list[SeqResult], out_dir: str,
     rows = []
     inputs = {s.seq_id: s for s in (seq_inputs or [])}
     used: set[str] = set()
-    for r in results:
+    for i, r in enumerate(results):
         if with_report:
             row = r.report_row()
             s = inputs.get(r.seq_id)
@@ -267,7 +271,7 @@ def write_outputs(results: list[SeqResult], out_dir: str,
                 row["length"] = len(s.seq)
                 row["gene_type"] = s.gene_type
             rows.append(row)
-        stem = _safe_stem(r.seq_id)
+        stem = _safe_stem(stems[i]) if stems and i < len(stems) else _safe_stem(r.seq_id)
         tbl = _unique_path(out_dir, stem, ".tbl", used)
         with open(tbl, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(r.tbl_text)

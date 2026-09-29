@@ -147,6 +147,7 @@ class ImportBox(QPlainTextEdit):
 
 class PageImport(QWidget):
     title = "1. Import & BLAST"
+    help_key = "page_import"
 
     def __init__(self, win):
         super().__init__()
@@ -154,13 +155,6 @@ class PageImport(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
-
-        header = QHBoxLayout()
-        header.addStretch(1)
-        self.lbl_count = QLabel("")
-        self.lbl_count.setObjectName("Hint")
-        header.addWidget(self.lbl_count)
-        layout.addLayout(header)
 
         self.import_box = ImportBox()
         self.import_box.setMinimumHeight(110)
@@ -195,11 +189,11 @@ class PageImport(QWidget):
         row.addWidget(b_example)
         row.addWidget(b_clear)
         row.addWidget(self.b_stop)
-        row.addStretch(1)
         b_help = QPushButton("Help")
         b_help.setToolTip("How to use this page: steps, terms, tips")
         b_help.clicked.connect(lambda: show_page_help("page_import", self))
-        row.addWidget(b_help)
+        row.addWidget(b_help)               # 紧挨 STOP 右侧
+        row.addStretch(1)
         layout.addLayout(row)
 
         # ---- 已导入序列清单：BLAST 状态 / 单条删除 / 双击 Seq ID 改名 ----
@@ -268,9 +262,8 @@ class PageImport(QWidget):
 
     # ---- 刷新 ----
     def refresh(self):
-        """页眉计数 + 序列清单 + BLAST 区状态（提示、BLAST 禁用条件）。"""
+        """序列清单 + BLAST 区状态（提示、BLAST 禁用条件）。"""
         n = len(self.win.sequences)
-        self.lbl_count.setText(f"{n} sequence(s) imported" if n else "")
         self._refresh_seq_table()
 
         email_ok = bool(self.win.make_config().email)
@@ -281,7 +274,7 @@ class PageImport(QWidget):
         elif self.win._blast_pending > 0:
             reason = "BLAST queue is running - wait for it to finish. "
         elif not email_ok:
-            reason = "Set your NCBI contact email in Tools ▸ Settings first. "
+            reason = "Set your NCBI contact email in menu ▸ Settings (Ctrl+,) first. "
         self.b_blast.setEnabled((n > 0 or has_input) and email_ok
                                 and self.win._blast_pending == 0)
         self.b_blast.setToolTip("" if self.b_blast.isEnabled()

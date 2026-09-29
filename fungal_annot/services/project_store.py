@@ -1,14 +1,18 @@
 """JSON 项目存取（§7.3）：保存/加载完整中间状态，可随时关闭续作。
 
-含版本号字段，为将来格式变更预留迁移（§3）。比对上下文（AnnotateDetail）
-不序列化——加载后如需编辑重验，重新执行一次注释即可。
+v2 格式（多参考对比）：results[seq_id] = {chosen, variants{accession → 结果}}，
+selected_refs[seq_id] = [accession, ...]（1-5 个，按排名序）。
+v1 格式（单参考）加载时迁移：单结果 → 单 variant（accession 取 provenance.reference），
+即为采纳者；selected_ref 单值 → 单元素列表。
+
+比对上下文（AnnotateDetail）不序列化——加载后如需编辑重验，重新执行一次注释即可。
 """
 import json
 import os
 import time
 from dataclasses import dataclass, field
 
-PROJECT_VERSION = 1
+PROJECT_VERSION = 2
 
 
 def _settings_path() -> str:
@@ -49,9 +53,38 @@ def _feature_from_dict(d):
         ref_key=tuple(d["ref_key"]) if d.get("ref_key") else None)
 
 
-def save_project(path: str, sequences, hits: dict, selected_ref: dict,
+def _result_to_dict(r) -> dict:
+    return {
+        "seq_id": r.seq_id,
+        "status": r.status,
+        "issues": [{"level": i.level, "code": i.code, "message": i.message}
+                   for i in r.issues],
+        "provenance": vars(r.provenance),
+        "tbl_text": r.tbl_text,
+        "fsa_text": r.fsa_text,
+        "features": [_feature_to_dict(f) for f in (r.features or [])],
+    }
+
+
+def _result_from_dict(r):
+    from ..core.models import Issue, Provenance
+    res = SeqResultLite(seq_id=r["seq_id"], status=r["status"],
+                        tbl_text=r["tbl_text"], fsa_text=r["fsa_text"])
+    res.features = [_feature_from_dict(d) for d in r.get("features", [])]
+    res.issues = [Issue(i["level"], i["code"], i["message"]) for i in r["issues"]]
+    prov = Provenance()
+    for f, v in r["provenance"].items():
+        setattr(prov, f, v)
+    res.provenance = prov
+    return res
+
+
+def save_project(path: str, sequences, hits: dict, selected_refs: dict,
                  results: dict, settings: dict | None = None,
-                 confirmed: dict | None = None, exported: bool = False) -> None:
+                 confirmed: dict | None = None, exported: bool = False,
+                 chosen_ref: dict | None = None) -> None:
+    """results 形如 {seq_id: {accession: SeqResult}}；chosen_ref[seq_id] 为采纳导出的
+    variant（缺省时取该序列的第一个 variant）。"""
     data = {
         "version": PROJECT_VERSION,
         "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -62,17 +95,11 @@ def save_project(path: str, sequences, hits: dict, selected_ref: dict,
         ],
         "hits": {k: [vars(h) | {"flags": dict(h.flags)} for h in v]
                  for k, v in hits.items()},
-        "selected_ref": selected_ref,
+        "selected_refs": {k: list(v) for k, v in (selected_refs or {}).items()},
         "results": {k: {
-            "seq_id": r.seq_id,
-            "status": r.status,
-            "issues": [{"level": i.level, "code": i.code, "message": i.message}
-                       for i in r.issues],
-            "provenance": vars(r.provenance),
-            "tbl_text": r.tbl_text,
-            "fsa_text": r.fsa_text,
-            "features": [_feature_to_dict(f) for f in (r.features or [])],
-        } for k, r in results.items()},
+            "chosen": (chosen_ref or {}).get(k, ""),
+            "variants": {acc: _result_to_dict(r) for acc, r in v.items()},
+        } for k, v in results.items()},
         # 审核状态一并持久化：红灯手动确认与已导出标记必须跨会话保留，
         # 否则重新打开项目后导出被再次拦截（确认作废）
         "confirmed": dict(confirmed or {}),
@@ -92,12 +119,26 @@ def save_project(path: str, sequences, hits: dict, selected_ref: dict,
         raise
 
 
-def load_project(path: str):
-    """返回 (sequences, hits, selected_ref, results, settings, confirmed, exported)。
+def _load_v1_results(data: dict):
+    """v1（单参考）→ v2 结构：单结果成为唯一 variant，accession 取 provenance.reference。"""
+    variants_by_sid = {}
+    for sid, r in data.get("results", {}).items():
+        acc = ((r.get("provenance") or {}).get("reference")
+               or (data.get("selected_ref", {}) or {}).get(sid) or "reference")
+        variants_by_sid[sid] = {acc: r}
+    selected_refs = {k: ([v] if v else [])
+                     for k, v in (data.get("selected_ref", {}) or {}).items()}
+    return variants_by_sid, selected_refs
 
-    results 反序列化为轻量 SeqResultLite（detail=None）。"""
+
+def load_project(path: str):
+    """返回 (sequences, hits, selected_refs, results, settings, confirmed,
+    exported, chosen_ref)。
+
+    results 形如 {seq_id: {accession: SeqResultLite}}（detail=None）；
+    chosen_ref[seq_id] 为采纳导出的 variant accession。"""
     from ..core.blast_runner import BlastHit
-    from ..core.models import Issue, Provenance, SeqInput
+    from ..core.models import SeqInput
 
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
@@ -115,22 +156,24 @@ def load_project(path: str):
                          subject_end=h["subject_end"], flags=h["flags"])
                 for h in v]
             for k, v in data.get("hits", {}).items()}
-    selected_ref = data.get("selected_ref", {})
-    results = {}
-    for k, r in data.get("results", {}).items():
-        res = SeqResultLite(seq_id=r["seq_id"], status=r["status"],
-                            tbl_text=r["tbl_text"], fsa_text=r["fsa_text"])
-        res.features = [_feature_from_dict(d)
-                        for d in r.get("features", [])]
-        res.issues = [Issue(i["level"], i["code"], i["message"]) for i in r["issues"]]
-        prov = Provenance()
-        for f, v in r["provenance"].items():
-            setattr(prov, f, v)
-        res.provenance = prov
-        results[k] = res
+    if version >= 2:
+        selected_refs = {k: list(v) for k, v in data.get("selected_refs", {}).items()}
+        raw = {sid: (v.get("variants", {}), v.get("chosen", ""))
+               for sid, v in data.get("results", {}).items()}
+    else:
+        raw_variants, selected_refs = _load_v1_results(data)
+        raw = {sid: (variants, "") for sid, variants in raw_variants.items()}
 
-    return (sequences, hits, selected_ref, results, data.get("settings", {}),
-            data.get("confirmed", {}), bool(data.get("exported", False)))
+    results: dict[str, dict] = {}
+    chosen_ref: dict[str, str] = {}
+    for sid, (variants_raw, chosen) in raw.items():
+        variants = {acc: _result_from_dict(r) for acc, r in variants_raw.items()}
+        results[sid] = variants
+        chosen_ref[sid] = chosen if chosen in variants else (
+            next(iter(variants)) if variants else "")
+
+    return (sequences, hits, selected_refs, results, data.get("settings", {}),
+            data.get("confirmed", {}), bool(data.get("exported", False)), chosen_ref)
 
 
 @dataclass

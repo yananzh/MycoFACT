@@ -1,8 +1,30 @@
-"""帮助卡片（Phase 3 新手友好）：术语就地解释（§7.2/§11）。"""
+"""帮助系统（统一样式的 HTML 弹窗）：三块内容 + 一套渲染基建。
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QMessageBox,
-                             QTextBrowser, QToolButton, QVBoxLayout)
+内容：HELP 术语词条（就地解释）、PAGE_HELP 四页指南（每页 Help 按钮）、
+APP_GUIDE 全软件使用指南（菜单 Guide / F1——菜单级帮助是整个软件的使用说明，
+而非当前页）；另有 About 弹窗（菜单栏）与 show_help 词条弹窗。
+
+渲染基建：Qt 富文本只支持 CSS 子集——<style> 块的元素选择器可用（Qt 6 实测），
+但横幅、提示框、数据表一律用表格单元格实现（background-color 与 padding 在
+单元格上支持最完整、最可预期）；弹窗外壳统一走 _wrap + _help_dialog。
+"""
+from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFrame, QHBoxLayout,
+                             QTextBrowser, QVBoxLayout)
+
+# ---- 调色板（与主窗口步骤条/红绿灯状态色一致）----
+ACCENT = "#2D7DD2"          # 当前步骤/主按钮的品牌蓝
+ACCENT_DARK = "#1B5A9C"     # 标题深蓝
+MUTED = "#57606a"
+HEAD_BG = "#e7f0fb"         # 表头浅蓝
+ZEBRA_BG = "#f6f8fa"        # 斑马纹
+GREEN = "#1a7f37"
+YELLOW = "#9a6700"
+RED = "#cf222e"
+
+# 红绿灯状态的配色与动作化文案（第 3/4 页共用；页面代码 import 这两个）
+STATUS_COLOR = {"green": GREEN, "yellow": YELLOW, "red": RED}
+STATUS_MARK = {"green": "✓ Ready", "yellow": "⚠ Warnings", "red": "✗ Needs review"}
+STATUS_BG = {"green": "#eaf4ec", "yellow": "#fff3cd", "red": "#ffebe9"}
 
 # "Marker" 列的就地解释（第 1/2/4 页共用）：说明自动判定机制与其影响
 MARKER_HINT = ("Marker gene preset (tef1, act, LSU...) chosen automatically from BLAST "
@@ -10,277 +32,510 @@ MARKER_HINT = ("Marker gene preset (tef1, act, LSU...) chosen automatically from
                "transferred (CDS vs rRNA) and the genetic code. Shows 'auto-detect' "
                "until then.")
 
-# 红绿灯状态的配色与动作化文案（第 3/4 页共用，与 status_colors 帮助卡一致）
-STATUS_COLOR = {"green": "#1a7f37", "yellow": "#9a6700", "red": "#cf222e"}
-STATUS_MARK = {"green": "✓ Ready", "yellow": "⚠ Warnings", "red": "✗ Needs review"}
-STATUS_HINT = {"green": "Ready", "yellow": "Ready - review the warnings below",
-               "red": "Needs review - fix it or confirm before export"}
 
-HELP = {
-    "status_colors": (
-        "Traffic-light status",
-        "<p>Every sequence gets one of three statuses after annotation - and again "
-        "after every edit:</p>"
-        "<ul>"
-        "<li><b style='color:#1a7f37'>✓ Ready</b> — no problems found. Nothing to do.</li>"
-        "<li><b style='color:#9a6700'>⚠ Warnings</b> — the table can be exported, but "
-        "read the warnings first (they are often expected for partial amplicons). "
-        "Confirming is optional.</li>"
-        "<li><b style='color:#cf222e'>✗ Needs review</b> — an error was detected. Fix it "
-        "in the feature table, or press <b>Confirm for export</b> to accept it "
-        "knowingly; export stays blocked until then.</li>"
-        "</ul>"),
-    "partial": (
-        "Partial feature",
-        "<p>A <b>partial feature</b> is one whose ends do not reach a natural gene boundary. "
-        "PCR amplicons almost never contain a complete gene, so features touching the "
-        "first/last base of your sequence are marked partial by writing "
-        "<code>&lt;1</code> or <code>&gt;520</code> in the five-column table.</p>"
-        "<p>This is expected and correct for amplicon submissions — GenBank reviewers "
-        "know the ends are cut by the primers.</p>"),
-    "codon_start": (
-        "codon_start",
-        "<p><b>codon_start</b> tells GenBank where the first <i>complete</i> codon begins inside a "
-        "5'-partial CDS: <code>1</code> = first base, <code>2</code> = skip 1 base, <code>3</code> = skip 2 bases.</p>"
-        "<p>Example: if your fragment starts 2 bases into a codon, the first complete codon "
-        "begins at base 2, so <code>codon_start=2</code>. This tool derives it automatically from "
-        "the reference CDS frame (plan §2.1).</p>"),
-    "transl_table": (
-        "transl_table (genetic code)",
-        "<p><b>transl_table</b> selects the genetic code used to translate a CDS:</p>"
-        "<ul>"
-        "<li><code>1</code> — standard code (nuclear fungal genes: tef1, rpb2, tub2 ...)</li>"
-        "<li><code>12</code> — alternative yeast code, CTG = Ser (Candida and relatives!)</li>"
-        "<li><code>4</code> — mold mitochondria; <code>3</code> — yeast mitochondria</li>"
-        "</ul>"
-        "<p>Using the wrong table silently mistranslates the protein — this tool takes the "
-        "table from the reference record and warns when it conflicts with the preset.</p>"),
-    "identity": (
-        "identity threshold",
-        "<p>The <b>nucleotide identity</b> between your sequence and the chosen reference must be "
-        "above this threshold (default 97%) before annotation is transferred automatically.</p>"
-        "<p>Below the threshold the sequence is flagged RED: a distant reference may have "
-        "misplaced exon boundaries, so a human should confirm the choice.</p>"),
-    "hit_columns": (
-        "Hit table columns",
-        "<p><b>Cover %</b> — percentage of your query covered by the hit (BLAST qcovs); "
-        "100% is required for reliable end annotation.</p>"
-        "<p><b>Ratio</b> — reference length / query length (Len ratio). About 1.0–1.5 is "
-        "ideal: your amplicon sits <i>inside</i> the reference with flanking context on "
-        "both sides. Values far above 2 indicate a genome-scale record (windowed fetch "
-        "will be used).</p>"
-        "<p><b>Ident %</b> — nucleotide identity of the hit (BLAST pident).</p>"),
+# ---- 渲染基建：小块拼装 ----------------------------------------------------
+def _chip(text: str, fg: str, bg: str) -> str:
+    """彩色徽章（Qt 富文本无 border-radius，用色块 + 空格内边距替代圆角药丸）。"""
+    return (f'<span style="background-color:{bg}; color:{fg}; font-weight:bold;">'
+            f'&nbsp;{text}&nbsp;</span>')
+
+
+def _status_chip(status: str) -> str:
+    return _chip(STATUS_MARK[status], STATUS_COLOR[status], STATUS_BG[status])
+
+
+def _note(text: str, kind: str = "tip") -> str:
+    """单格表格提示框：tip（蓝）/ warn（黄）/ danger（红）。"""
+    bg, fg, label = {"tip": ("#eef4fb", ACCENT_DARK, "TIP"),
+                     "warn": ("#fff3cd", "#7a5600", "HEADS-UP"),
+                     "danger": ("#ffebe9", RED, "IMPORTANT")}[kind]
+    return ('<table width="100%" cellspacing="0" cellpadding="0"><tr>'
+            '<td style="background-color:' + bg + '; padding-top:8px; '
+            'padding-bottom:8px; padding-left:10px; padding-right:10px;">'
+            f'<span style="color:{fg}; font-weight:bold;">{label}&nbsp;&nbsp;</span>{text}'
+            '</td></tr></table>')
+
+
+def _table(headers, rows, widths=()) -> str:
+    """斑马纹数据表：headers 为纯文本，rows 的单元格是 HTML 片段。"""
+    head = []
+    for i, h in enumerate(headers):
+        w = f' width="{widths[i]}"' if i < len(widths) else ""
+        head.append(f'<td{w} style="background-color:{HEAD_BG}; padding-top:5px; '
+                    f'padding-bottom:5px; padding-left:8px; padding-right:8px;">'
+                    f'<b>{h}</b></td>')
+    body = []
+    for i, row in enumerate(rows):
+        bg = "#ffffff" if i % 2 == 0 else ZEBRA_BG
+        tds = "".join(f'<td style="background-color:{bg}; padding-top:5px; '
+                      f'padding-bottom:5px; padding-left:8px; padding-right:8px;">'
+                      f'{c}</td>' for c in row)
+        body.append(f"<tr>{tds}</tr>")
+    return ('<table width="100%" cellspacing="0" cellpadding="0">'
+            f'<tr>{"".join(head)}</tr>{"".join(body)}</table>')
+
+
+def _terms_table(pairs) -> str:
+    return _table(("Term", "What it means"),
+                  [(f"<b>{t}</b>", m) for t, m in pairs], widths=(170,))
+
+
+def _fix_table(rows) -> str:
+    return _table(("What you see", "What to do"),
+                  [(f"<b>{a}</b>", b) for a, b in rows], widths=(240,))
+
+
+# ---- 渲染基建：弹窗外壳 ----------------------------------------------------
+_DOC_CSS = (
+    "h3 { color: " + ACCENT_DARK + "; font-size: 12pt; margin-top: 16px; margin-bottom: 5px; }"
+    "p { margin-top: 4px; margin-bottom: 6px; }"
+    "li { margin-top: 2px; margin-bottom: 3px; }"
+    "code { background-color: #f0f3f6; color: #953800; }"
+    "td { vertical-align: top; }"
+)
+
+
+def _wrap(title: str, subtitle: str, body: str, footer: str = "") -> str:
+    """统一外壳：品牌横幅（单格表，背景最可靠）+ 样式表 + 正文容器 + 页脚。"""
+    banner = (
+        '<table width="100%" cellspacing="0" cellpadding="0"><tr>'
+        '<td style="background-color:' + ACCENT + '; padding-top:12px; '
+        'padding-bottom:12px; padding-left:16px; padding-right:16px;">'
+        '<span style="color:#ffffff; font-size:16pt; font-weight:bold;">' + title
+        + '</span><br>'
+        '<span style="color:#d8e7f8; font-size:10pt;">' + subtitle + '</span>'
+        '</td></tr></table>')
+    foot = f'<p style="color:{MUTED}; font-size:8.5pt;">{footer}</p>' if footer else ""
+    return (f"<style>{_DOC_CSS}</style>" + banner
+            + f'<div style="margin-left:14px; margin-right:14px;">{body}{foot}</div>')
+
+
+def _help_dialog(title: str, html: str, size: tuple, parent=None) -> QDialog:
+    """统一样式帮助弹窗：横幅贴边（零边距）+ 可滚动正文 + Close。"""
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(title)
+    dlg.resize(*size)
+    v = QVBoxLayout(dlg)
+    v.setContentsMargins(0, 0, 0, 0)
+    v.setSpacing(0)
+    browser = QTextBrowser()
+    browser.setOpenExternalLinks(False)
+    browser.setFrameShape(QFrame.Shape.NoFrame)
+    browser.setHtml(html)
+    v.addWidget(browser, 1)
+    row = QHBoxLayout()
+    row.setContentsMargins(12, 6, 12, 8)
+    bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+    bb.rejected.connect(dlg.reject)
+    row.addWidget(bb)
+    v.addLayout(row)
+    return dlg
+
+
+# ---- 页面指南（每页按钮区的 Help 按钮）：What / How to use / Terms / Tips / 问题速查 ----
+_PAGE_META = {
+    "page_import": ("Import &amp; BLAST",
+                    "Step 1 of 4 · bring sequences in and find close references"),
+    "page_reference": ("Select Reference",
+                       "Step 2 of 4 · pick references and transfer their annotation"),
+    "page_review": ("Review Annotation",
+                    "Step 3 of 4 · compare results, fix issues, confirm for export"),
+    "page_export": ("Export Results",
+                    "Step 4 of 4 · write .tbl files and submit via BankIt"),
 }
 
-
-def show_help(term: str, parent=None):
-    """按词条名弹出富文本术语解释（供 HelpButton 与 issue 行点击共用）。"""
-    title, body = HELP[term]
-    box = QMessageBox(parent)
-    box.setWindowTitle(title)
-    box.setTextFormat(Qt.TextFormat.RichText)
-    box.setText(body)
-    box.setIcon(QMessageBox.Icon.Information)
-    box.exec()
-
-
-class HelpButton(QToolButton):
-    """'? 按钮：点击弹出富文本术语解释。"""
-
-    def __init__(self, term: str, parent=None):
-        super().__init__(parent)
-        self.term = term
-        self.setText("?")
-        self.setFixedSize(22, 22)
-        self.setToolTip("What is this?")
-        self.clicked.connect(self._show)
-
-    def _show(self):
-        show_help(self.term, self)
-
-
-# ---- 页面指南（每页按钮区的 Help 按钮）：How to use / Terms / Tips 三段式 ----
 PAGE_HELP = {
-    "page_import": (
-        "How to use: Import & BLAST",
-        "<h3>What this page does</h3>"
-        "<p>Bring your sequences into the project and find close references with an "
-        "online BLAST search.</p>"
-        "<h3>How to use</h3>"
-        "<ul>"
-        "<li><b>Paste</b> FASTA text (one or more entries) or a bare DNA sequence into "
-        "the box; <b>drag &amp; drop</b> FASTA files onto it; or use <b>Browse</b>.</li>"
-        "<li><b>Example</b> loads four demo sequences so you can try the whole workflow.</li>"
-        "<li>Click <b>BLAST</b>: the box content is imported automatically and the "
-        "search queue starts. It runs serially (~1-5 min per sequence, NCBI rate "
-        "limits); when the queue drains the app moves to step 2 on its own.</li>"
-        "<li>The table lists every imported sequence: ID, length, marker and BLAST "
-        "state. <b>Double-click a Seq ID to rename</b> it (hits, results and "
-        "confirmations follow the new name); <b>✕</b> removes a sequence.</li>"
-        "</ul>"
-        "<h3>Terms</h3>"
-        "<ul>"
-        "<li><b>FASTA</b> - plain-text sequence format; every entry starts with a "
-        "\"&gt;\" header line.</li>"
-        "<li><b>Marker</b> - which locus a sequence is (tef1, act, LSU ...). Detected "
-        "automatically from BLAST titles during annotation; it decides which features "
-        "are transferred (CDS vs rRNA) and the genetic code.</li>"
-        "<li><b>NCBI email</b> - required by NCBI for online BLAST; set it in "
-        "Tools ▸ Settings before your first search.</li>"
-        "</ul>"
-        "<h3>Tips</h3>"
-        "<ul>"
-        "<li>Seq IDs must be unique (letters, digits and . _ : - | +) - they become "
-        "the file names of the exported .tbl.</li>"
-        "<li>Clicking BLAST again skips sequences that already have hits, so you can "
-        "add latecomers and search only those.</li>"
-        "<li>Long runs of N near feature ends are flagged later in step 3.</li>"
-        "</ul>"),
-    "page_reference": (
-        "How to use: Select Reference",
-        "<h3>What this page does</h3>"
-        "<p>For each sequence, pick the reference record whose annotation will be "
-        "transferred to it.</p>"
-        "<h3>How to use</h3>"
-        "<ul>"
-        "<li>Select a sequence on the left; the hit table shows its BLAST hits.</li>"
-        "<li>Click the radio button in the <b>Use</b> column. The first row is "
-        "pre-selected - the <b>recommended</b> hit (blue row): best identity, full "
-        "coverage, culture/type strains preferred, length ratio in the 1.0-1.5 sweet "
-        "spot.</li>"
-        "<li><b>Use recommended for all</b> accepts the top hit for every sequence.</li>"
-        "<li><b>View match</b> lists each sequence's current reference accession - edit "
-        "any of them, or clear a row to fall back to the recommended hit.</li>"
-        "<li><b>Start Annotation</b> downloads each reference, transfers gene/CDS (or "
-        "rRNA) features onto your sequence and validates them - then step 3 opens. "
-        "Re-running it overwrites previous results with fresh ones.</li>"
-        "</ul>"
-        "<h3>Terms</h3>"
-        "<ul>"
-        "<li><b>Ident %</b> - nucleotide identity between the hit and your sequence.</li>"
-        "<li><b>Cover %</b> - how much of your sequence the hit covers; 100% is needed "
-        "for reliable end annotation.</li>"
-        "<li><b>Ratio</b> - reference length / your length. 1.0-1.5 is ideal (your "
-        "amplicon sits inside the reference); far above 2 marks a genome-scale record "
-        "(a matching window is fetched automatically).</li>"
-        "<li><b>Accession</b> - the stable record ID (e.g. MZ123456.1). You may also "
-        "type one yourself in View match - it does not have to be in the hit list.</li>"
-        "</ul>"
-        "<h3>Tips</h3>"
-        "<ul>"
-        "<li>Prefer hits marked with a star (culture / type strains) - names follow "
-        "the strain.</li>"
-        "<li>Identity below the threshold (default 97%) turns the sequence red in "
-        "step 3 - pick a closer hit here.</li>"
-        "<li>Large genome records (Ratio &gt; 2) are fine: only the matching region "
-        "is fetched and the rest is discarded.</li>"
-        "</ul>"),
-    "page_review": (
-        "How to use: Review Annotation",
-        "<h3>What this page does</h3>"
-        "<p>Check the transferred annotation, fix what is wrong, and confirm what you "
-        "accept. Every edit is re-validated automatically.</p>"
-        "<h3>Status colors</h3>"
-        "<ul>"
-        "<li><b style='color:#1a7f37'>✓ Ready</b> - no problems found; nothing to "
-        "do.</li>"
-        "<li><b style='color:#9a6700'>⚠ Warnings</b> - exportable, but read the issues "
-        "first; confirming is optional.</li>"
-        "<li><b style='color:#cf222e'>✗ Needs review</b> - an error was detected; fix "
-        "it or press Confirm. Export stays blocked until then.</li>"
-        "</ul>"
-        "<h3>How to use</h3>"
-        "<ul>"
-        "<li>Edit cells directly: <b>Type</b> (CDS, gene, rRNA ...), <b>Strand</b> "
-        "(+/-), <b>Coordinates</b>, <b>Qualifiers</b>. Re-validation runs about 0.6 s "
-        "after you stop typing and the status updates everywhere.</li>"
-        "<li><b>Add feature</b> inserts a CDS row spanning the whole sequence; "
-        "<b>Delete row</b> removes the selected rows. The source row is managed for "
-        "you.</li>"
-        "<li><b>View alignment</b> lays the reference against your sequence (\"|\" = "
-        "match) - use it to check exon boundaries and indels. <b>View reference "
-        "features</b> shows the reference's own table for comparison.</li>"
-        "<li>The <b>Issues</b> list explains every finding with a suggested action. "
-        "Click an issue to jump to the related feature row and/or open a glossary "
-        "card.</li>"
-        "<li><b>Confirm for export</b>: required for red sequences (accept knowingly - "
-        "an optional note goes to the log), optional for yellow, disabled when "
-        "green.</li>"
-        "</ul>"
-        "<h3>Terms</h3>"
-        "<ul>"
-        "<li><b>Partial (&lt;1 / &gt;520)</b> - feature ends cut by the primers; "
-        "normal for amplicons and expected by GenBank.</li>"
-        "<li><b>codon_start</b> - where the first complete codon starts inside a "
-        "5'-partial CDS (1, 2 or 3).</li>"
-        "<li><b>Re-check all</b> - re-runs validation on every annotated sequence with "
-        "the current settings (e.g. after changing the identity threshold).</li>"
-        "</ul>"
-        "<h3>Tips</h3>"
-        "<ul>"
-        "<li>Coordinates syntax: <code>&lt;1..300, 401..520</code> - commas separate "
-        "exons, \"&lt;\" / \"&gt;\" mark partial ends.</li>"
-        "<li>Project files (.fap.json) do not store the alignment context, so editing "
-        "is disabled there - re-annotate in step 2 to restore it.</li>"
-        "<li>Red sequences stay blocked on step 4 until confirmed - by design, since "
-        "NCBI reviewers reject silent errors.</li>"
-        "</ul>"),
-    "page_export": (
-        "How to use: Export Results",
-        "<h3>What this page does</h3>"
-        "<p>Write one five-column .tbl file per sequence (BankIt format).</p>"
-        "<h3>How to use</h3>"
-        "<ul>"
-        "<li>Set the <b>output directory</b>, then <b>Export all</b>. Files are named "
-        "&lt;SeqID&gt;.tbl and are overwritten on re-export.</li>"
-        "<li><b>Open output folder</b> opens the directory in Windows Explorer.</li>"
-        "<li>Sequences marked <b>Needs review</b> must be confirmed on the Review page "
-        "first - export is blocked otherwise.</li>"
-        "</ul>"
-        "<h3>What's next (BankIt)</h3>"
-        "<ul>"
-        "<li>Go to the NCBI <b>BankIt</b> portal and start a nucleotide submission "
-        "(GB2sequin-style workflow).</li>"
-        "<li>Upload the .tbl files and your original FASTA sequences when the portal "
-        "asks for them.</li>"
-        "<li>The portal form collects <b>organism and source modifiers</b> (isolate, "
-        "country, collection date ...) - they are intentionally not part of the "
-        ".tbl. Let the portal validate, then submit.</li>"
-        "</ul>"
-        "<h3>Terms</h3>"
-        "<ul>"
-        "<li><b>.tbl</b> - five-column feature table: start, stop, feature key and "
-        "qualifiers (BankIt format).</li>"
-        "<li><b>BankIt portal</b> - NCBI's web submission wizard; it pairs your .tbl "
-        "with the FASTA sequence and adds the source information.</li>"
-        "</ul>"
-        "<h3>Tips</h3>"
-        "<ul>"
-        "<li>Export again after any edit in step 3 - the files always reflect the "
-        "current tables.</li>"
-        "<li>Statuses shown here were last re-checked on the Review page; re-export "
-        "after any change.</li>"
-        "</ul>"),
+    "page_import": ("How to use: Import & BLAST", f"""
+<h3>What this page does</h3>
+<p>Import your marker sequences and find close references for each with an
+<b>online BLAST</b> search at NCBI.</p>
+
+<h3>How to use</h3>
+<ol>
+<li><b>Get sequences in</b> - paste FASTA (or a bare DNA sequence) into the box,
+<b>drag &amp; drop</b> files onto it, or use <b>Browse</b>. No sequences at hand?
+<b>Example</b> loads four demo sequences.</li>
+<li><b>Press BLAST.</b> The box content is imported (duplicate IDs rejected) and
+searched serially, ~1-5 min per sequence. When the queue drains, the app moves
+to step 2 on its own.</li>
+<li><b>Manage the list:</b> <b>double-click a Seq ID to rename</b> (hits, results
+and confirmations follow); <b>✕</b> removes a sequence; <b>STOP</b> cancels the
+remaining queue.</li>
+</ol>
+
+<h3>Terms</h3>
+{_terms_table((
+    ("FASTA", 'Plain-text sequence format; entries start with a "&gt;" header line.'),
+    ("Seq ID", "Unique name (letters, digits and . _ : - | +) - it becomes the "
+               "exported file name <code>&lt;SeqID&gt;.tbl</code>."),
+    ("Marker", "Which locus the sequence is (tef1, act, LSU, ...) - auto-detected "
+               "from BLAST titles; decides which features are transferred and the "
+               "genetic code."),
+    ("NCBI email", "Required for online BLAST - set it in menu ▸ Settings (Ctrl+,)."),
+    ("BLAST state", f"<code>-</code> queued · <span style='color:{YELLOW}'>running…"
+                    f"</span> searching · <span style='color:{GREEN}'>done</span> "
+                    "hits stored."),
+))}
+
+<h3>Tips</h3>
+<ul>
+<li><b>BLAST again</b> searches only sequences without hits - add latecomers any
+time.</li>
+<li>Seq IDs must be unique - they become the exported file names.</li>
+</ul>
+
+<h3>Common problems</h3>
+{_fix_table((
+    ("BLAST is disabled", "Box empty, queue running, or email missing - set it in "
+                          "menu ▸ Settings (Ctrl+,)."),
+    ("Non-nucleotide characters ...", "Input has letters outside the DNA alphabet - "
+                                      "fix it and press BLAST again."),
+    ("Duplicate Seq ID", "Rename one (double-click the Seq ID in the list)."),
+    ("BLAST failed", "Network hiccup or NCBI throttling - press BLAST again; "
+                     "finished ones are skipped."),
+))}
+"""),
+    "page_reference": ("How to use: Select Reference", f"""
+<h3>What this page does</h3>
+<p>Pick the reference record(s) whose annotation will be transferred onto each
+sequence - up to 5 per sequence, compared side by side in step 3.</p>
+
+<h3>How to use</h3>
+<ol>
+<li><b>Select a sequence</b> on the left; its ranked BLAST hits fill the table.
+The <b>light-blue top row is the recommended</b> hit.</li>
+<li><b>Check hits in the Use column</b> - 1 to 5 per sequence; top-ranked ones
+are pre-checked (Settings ▸ default_refs). Each checked hit gets its own result
+in step 3.</li>
+<li><b>View match</b> edits the accession lists - you may type accessions not in
+the hit list; clear a row to fall back to the recommended hits.</li>
+<li><b>Start Annotation</b> downloads each reference, transfers gene/CDS (or
+rRNA) features and validates - step 3 opens when the queue drains.</li>
+</ol>
+
+<h3>Terms</h3>
+{_terms_table((
+    ("Ident %", "Nucleotide identity between hit and your sequence."),
+    ("Cover %", "How much of your sequence the hit aligns - near 100% is needed "
+                "for reliable ends."),
+    ("Ratio", "Reference length / yours. 1.0-1.5 ideal; &gt;2 = genome-scale "
+              "record (only the matching window is fetched)."),
+    ("Accession", "Stable record ID (e.g. MZ123456.1) - you may type your own in "
+                  "View match."),
+    ("Use", "Checkbox column - checked = annotated against this reference."),
+))}
+
+<h3>Tips</h3>
+<ul>
+<li>Identity below the threshold (default 97%) turns the sequence
+<span style="color:{RED}">red</span> in step 3 - pick a closer hit here.</li>
+<li>Genome-scale records (Ratio &gt; 2) are fine.</li>
+</ul>
+
+<h3>Common problems</h3>
+{_fix_table((
+    ("Start Annotation is disabled", "Every sequence needs at least one reference - "
+                                     "check hits or use View match."),
+    ("[seq] no reference chosen - skipped", "No BLAST hits - back to step 1."),
+    ("Failed vs ACCESSION", "Reference download failed - press Start Annotation "
+                            "again once the network is back."),
+))}
+"""),
+    "page_review": ("How to use: Review Annotation", f"""
+<h3>What this page does</h3>
+<p>Compare the transferred annotation, fix what is wrong, and adopt one result
+per sequence for export. Every edit is re-validated automatically.</p>
+
+<h3>Status colors</h3>
+{_table(("Status", "Meaning"),
+        ((_status_chip("green"), "No problems - nothing to do."),
+         (_status_chip("yellow"), "Exportable, but read the issues first."),
+         (_status_chip("red"), "Fix it or confirm knowingly - export blocked "
+                               "until then.")),
+        widths=(175,))}
+
+<h3>How to use</h3>
+<ol>
+<li><b>Pick a sequence</b> on the left; <b>Annotation results</b> lists one row
+per reference. Click a row to inspect it; tick the <b>Use</b> radio to adopt it
+for export.</li>
+<li><b>Edit cells directly</b> - Type, Strand, Coordinates, Qualifiers.
+Re-validation runs ~0.6 s after you stop typing.</li>
+<li><b>Add feature</b> / <b>Delete row</b> manage rows (the source row is
+protected); <b>View alignment</b> checks exon boundaries against the reference.</li>
+<li><b>Confirm for export</b> - required for red, optional for yellow, disabled
+for green.</li>
+</ol>
+
+<h3>Terms</h3>
+{_terms_table((
+    ("Partial (&lt;1 / &gt;520)", "Ends cut by the primers - normal for amplicons."),
+    ("codon_start", "First complete codon in a 5'-partial CDS (1/2/3) - derived "
+                    "automatically."),
+    ("transl_table", "Genetic code used to translate a CDS - taken from the "
+                     "reference."),
+    ("Variants", "Per-reference results; exactly one is adopted (Use) per "
+                 "sequence."),
+    ("Re-check all", "Re-validates every annotated sequence with the current "
+                     "settings."),
+))}
+
+<h3>Tips</h3>
+<ul>
+<li>Coordinates syntax: <code>&lt;1..300, 401..520</code> - commas split exons,
+"&lt;" / "&gt;" mark partial ends.</li>
+<li>Hover the <b>Issues</b> column for the full findings with suggested fixes.</li>
+</ul>
+
+<h3>Common problems</h3>
+{_fix_table((
+    ("Cells are read-only", "Loaded from a .fap.json without alignment context - "
+                            "re-annotate on step 2."),
+    ("Still red after an edit", "Wait ~0.6 s; hover Issues for the exact problem."),
+    ("Export blocked on step 4", "A red sequence is unconfirmed - press Confirm "
+                                 "for export here."),
+))}
+"""),
+    "page_export": ("How to use: Export Results", f"""
+<h3>What this page does</h3>
+<p>Write one <b>five-column .tbl</b> (BankIt format) per sequence, from the
+variant adopted in step 3.</p>
+
+<h3>How to use</h3>
+<ol>
+<li><b>Set the output directory</b> and press <b>Export Feature Table</b> - one
+<code>&lt;SeqID&gt;.tbl</code> per annotated sequence (overwrites existing
+files).</li>
+<li><b>Open output folder</b> shows the results in Explorer.</li>
+<li>Unconfirmed red sequences block the export - confirm them on step 3.</li>
+</ol>
+
+<h3>What's next (BankIt)</h3>
+<ul>
+<li>Start a nucleotide submission in the NCBI <b>BankIt</b> portal; upload the
+.tbl files <b>and your original FASTA</b>.</li>
+<li>Organism and source modifiers (isolate, country, collection date, ...) are
+collected by the portal - deliberately not part of the .tbl.</li>
+</ul>
+
+<h3>Terms</h3>
+{_terms_table((
+    (".tbl", "Five-column feature table (start, stop, feature key, qualifiers) - "
+             "features only, no sequence."),
+    ("BankIt portal", "NCBI's web submission wizard; pairs the .tbl with your "
+                      "FASTA and adds the source information."),
+    ("Adopted variant", "The result ticked in Use on step 3 - the one exported."),
+    ("Confirmed", "Yes = red status knowingly accepted on step 3."),
+))}
+
+<h3>Tips</h3>
+<ul>
+<li><b>Re-export after any edit</b> in step 3 - files always reflect the current
+tables.</li>
+</ul>
+
+<h3>Common problems</h3>
+{_fix_table((
+    ("Export blocked", "Red sequences lack confirmation - confirm them on step 3."),
+    ("Could not write to '&lt;dir&gt;'", "Invalid or read-only directory - pick "
+                                         "another one."),
+    ("Nothing to export yet", "Annotate sequences in steps 1-3 first."),
+))}
+"""),
 }
 
 
 def build_page_help_dialog(term: str, parent=None) -> QDialog:
-    """构建页面指南弹窗（富文本、可滚动）；供 show_page_help 与测试使用。"""
-    title, html = PAGE_HELP[term]
-    dlg = QDialog(parent)
-    dlg.setWindowTitle(title)
-    dlg.resize(680, 560)
-    v = QVBoxLayout(dlg)
-    browser = QTextBrowser()
-    browser.setOpenExternalLinks(False)
-    browser.setHtml(html)
-    v.addWidget(browser, 1)
-    bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-    bb.rejected.connect(dlg.reject)
-    v.addWidget(bb)
-    return dlg
+    """构建页面指南弹窗（统一样式、可滚动）；供 show_page_help 与测试使用。"""
+    title, body = PAGE_HELP[term]
+    page, subtitle = _PAGE_META[term]
+    html = _wrap(page, subtitle, body,
+                 footer="Press <b>F1</b> for the full user guide of the whole app.")
+    return _help_dialog(title, html, (720, 600), parent)
 
 
 def show_page_help(term: str, parent=None):
-    """弹出某页的使用指南（How to use / Terms / Tips）。"""
+    """弹出某页的使用指南（How to use / Terms / Tips / Common problems）。"""
     build_page_help_dialog(term, parent).exec()
+
+
+# ---- 术语词条（就地解释）：统一弹窗样式 ----
+_EX_PARTIAL = ('Example: <code>&lt;1..520</code> reads "starts upstream of base 1, '
+               "ends at base 520\" - the 5' end was cut by the primer.")
+
+_CODON_ROWS = _table(("codon_start", "Meaning"),
+                     (("<b>1</b>", "The first base of the sequence is the first base "
+                                   "of a codon."),
+                      ("<b>2</b>", "Skip 1 base - the sequence starts 1 base into a "
+                                   "codon."),
+                      ("<b>3</b>", "Skip 2 bases - the sequence starts 2 bases into a "
+                                   "codon.")),
+                     widths=(130,))
+
+_CODE_ROWS = _table(("Code", "Genetic code", "Typical use"),
+                    (("<b>1</b>", "standard", "nuclear fungal genes: tef1, rpb2, "
+                                              "tub2, act, ..."),
+                     ("<b>12</b>", "alternative yeast (CTG = Ser)",
+                      "Candida and relatives - the classic trap!"),
+                     ("<b>4</b>", "mold mitochondria", "mitochondrial markers of molds"),
+                     ("<b>3</b>", "yeast mitochondria", "mitochondrial markers of yeasts")),
+                    widths=(60, 200, 220))
+
+HELP = {
+    "partial": ("Partial feature",
+                "<p>A <b>partial feature</b> is one whose ends do not reach a natural "
+                "gene boundary. PCR amplicons almost never contain a complete gene, so "
+                "features touching the first/last base of your sequence are marked "
+                "partial by writing <code>&lt;1</code> or <code>&gt;520</code> in the "
+                "five-column table.</p>"
+                + _note(_EX_PARTIAL)
+                + "<p>This is expected and correct for amplicon submissions - GenBank "
+                  "reviewers know the ends are cut by the primers.</p>"),
+    "codon_start": ("codon_start",
+                    "<p><b>codon_start</b> tells GenBank where the first <i>complete</i> "
+                    "codon begins inside a 5'-partial CDS. This tool derives it "
+                    "automatically from the reference CDS frame - you normally never "
+                    "edit it, and it only matters for 5'-partial CDS.</p>"
+                    + _CODON_ROWS),
+    "transl_table": ("transl_table (genetic code)",
+                     "<p><b>transl_table</b> selects the genetic code used to translate "
+                     "a CDS:</p>" + _CODE_ROWS
+                     + _note("Using the wrong table silently mistranslates the protein - "
+                             "the tool takes the table from the reference record and "
+                             "warns when it conflicts with the marker preset.", "warn")),
+    "identity": ("identity threshold",
+                 "<p>The <b>nucleotide identity</b> between your sequence and the chosen "
+                 "reference must be above this threshold (default 97%) before annotation "
+                 "is transferred without a red flag.</p>"
+                 "<p>Below the threshold the sequence is flagged " + _status_chip("red")
+                 + " on step 3: a distant reference may have misplaced exon boundaries, "
+                   "so a human should confirm the choice.</p>"
+                 + _note("Change the threshold in menu ▸ Settings (Ctrl+,); press "
+                         "<b>Re-check all</b> on step 3 to re-evaluate existing results.")),
+}
+
+
+def build_term_help_dialog(term: str, parent=None) -> QDialog:
+    """构建术语词条弹窗（统一样式）；供 show_help 与测试使用。"""
+    title, body = HELP[term]
+    html = _wrap(title, "Glossary · what the term means in this tool", body)
+    return _help_dialog(title, html, (620, 440), parent)
+
+
+def show_help(term: str, parent=None):
+    """按词条名弹出富文本术语解释（issue 行点击等入口共用）。"""
+    build_term_help_dialog(term, parent).exec()
+
+
+# ---- 全软件使用指南（菜单 Guide / F1）----
+_APP_STEPS = _table(
+    ("Step", "Page", "What you do", "What you get"),
+    ((_chip("1", "#ffffff", ACCENT), "<b>Import &amp; BLAST</b>",
+      "Paste or drop FASTA, press <b>BLAST</b>",
+      "A ranked hit list per sequence"),
+     (_chip("2", "#ffffff", ACCENT), "<b>Select Reference</b>",
+      "Check 1-5 references, press <b>Start Annotation</b>",
+      "Validated gene models per reference"),
+     (_chip("3", "#ffffff", ACCENT), "<b>Review Annotation</b>",
+      "Fix issues, adopt one result per sequence",
+      "An adopted annotation per sequence"),
+     (_chip("4", "#ffffff", ACCENT), "<b>Export Results</b>",
+      "Pick a folder, press <b>Export Feature Table</b>",
+      "&lt;SeqID&gt;.tbl files for BankIt")),
+    widths=(70, 150, 220, 200))
+
+_APP_STATUS = _table(
+    ("Status", "Meaning"),
+    ((_status_chip("green"), "No problems - nothing to do."),
+     (_status_chip("yellow"), "Exportable, but read the issues first."),
+     (_status_chip("red"), "Fix or confirm knowingly - export blocked until "
+                           "then.")),
+    widths=(175,))
+
+_APP_SHORTCUTS = _table(
+    ("Where", "Action"),
+    (("<b>F1</b>", "This guide - from anywhere."),
+     ("<b>Ctrl+,</b>", "Settings: email, identity threshold, references compared."),
+     ("Help button on each page", "Step-specific guide."),
+     ("Double-click a Seq ID (step 1)", "Rename - hits, results and confirmations "
+                                        "follow.")),
+    widths=(210,))
+
+APP_GUIDE = ("User Guide", f"""
+<h3>What this tool does</h3>
+<p>For each fungal marker amplicon, find a close reference on NCBI, transfer its
+annotation, review and fix it, and export the <b>five-column .tbl</b> that NCBI
+BankIt expects - one file per sequence.</p>
+
+<h3>The four-step workflow</h3>
+{_APP_STEPS}
+<p style="margin-top:8px;">{_note("Steps unlock in order - hover a locked step for the reason; click any unlocked step to jump.")}</p>
+
+<h3>Settings (Ctrl+,)</h3>
+<p>Three settings - everything else runs on sensible defaults:</p>
+<ul>
+<li><b>NCBI contact email</b> - required for the online BLAST.</li>
+<li><b>identity threshold (97%)</b> - below it a sequence is flagged red.</li>
+<li><b>References compared per sequence (1-5)</b> - pre-checked on step 2.</li>
+</ul>
+
+<h3>Review status at a glance</h3>
+{_APP_STATUS}
+<p style="margin-top:6px;">The same colors run through step 3 (list and ribbon),
+step 4 (summary) and the status bar.</p>
+
+<h3>Getting the submission out</h3>
+<p>One <code>&lt;SeqID&gt;.tbl</code> per sequence from the adopted variant. In
+the <b>BankIt</b> portal upload them with your original FASTA; organism and
+source modifiers are entered there.</p>
+
+<h3>Menus and shortcuts</h3>
+{_APP_SHORTCUTS}
+
+<h3>Good to know</h3>
+<ul>
+<li><b>BLAST again</b> skips sequences with hits; <b>STOP</b> cancels the rest.</li>
+<li><b>Re-export</b> after edits on step 3 - files are overwritten.</li>
+<li>Nothing leaves your machine except the sequences sent to NCBI for BLAST.</li>
+</ul>
+{_note("Verify before submitting - annotation transfer is a drafting aid.", "danger")}
+""")
+
+_APP_SUBTITLE = ("MycoFACT · from raw amplicon "
+                 "sequences to a BankIt-ready submission")
+
+
+def build_app_guide_dialog(parent=None) -> QDialog:
+    """构建全软件使用指南弹窗（菜单 Guide / F1 的内容）。"""
+    title, body = APP_GUIDE
+    html = _wrap(title, _APP_SUBTITLE, body,
+                 footer="Every page also has its own <b>Help</b> button with "
+                        "step-specific guidance.")
+    return _help_dialog(title, html, (800, 640), parent)
+
+
+def show_app_guide(parent=None):
+    """弹出全软件使用指南（菜单 Guide / F1）。"""
+    build_app_guide_dialog(parent).exec()
+
+
+# ---- About（菜单栏）----
+def build_about_dialog(version: str, parent=None) -> QDialog:
+    body = f"""
+<p>Reference-annotation transfer for fungal marker sequences: BLAST a close
+reference, transfer its annotation, review and fix it, and export BankIt-ready
+five-column <code>.tbl</code> feature tables.</p>
+<p>Four steps - <b>Import &amp; BLAST</b> → <b>Select Reference</b> →
+<b>Review Annotation</b> → <b>Export Results</b>. Press <b>F1</b> for the full
+user guide; every page has its own Help button.</p>
+{_note("Results are drafting aids - verify against current NCBI rules before submitting.", "warn")}
+"""
+    html = _wrap("MycoFACT",
+                 f"Version {version} · fungal feature annotation & comparison tool "
+                 f"(reference-annotation transfer for fungal marker sequences)", body)
+    return _help_dialog("About", html, (620, 400), parent)
+
+
+def show_about(version: str, parent=None):
+    """弹出关于弹窗（菜单栏 About）。"""
+    build_about_dialog(version, parent).exec()

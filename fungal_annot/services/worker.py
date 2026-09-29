@@ -19,9 +19,12 @@ from .pipeline import annotate_sequence
 class WorkerSignals(QObject):
     progress = pyqtSignal(str, str, float)   # seq_id, stage, fraction
     log = pyqtSignal(str)
-    finished = pyqtSignal(int, str, object)  # gen, seq_id, payload（hits list / SeqResult）
-    failed = pyqtSignal(int, str, str)       # gen, seq_id, 错误摘要
-    skipped = pyqtSignal(int, str)           # gen, seq_id（取消/作废后未执行的任务）
+    finished = pyqtSignal(int, str, str, object)  # gen, seq_id, ref_key, payload
+    failed = pyqtSignal(int, str, str, str)       # gen, seq_id, ref_key, 错误摘要
+    skipped = pyqtSignal(int, str, str)           # gen, seq_id, ref_key（取消/作废的任务）
+
+# BLAST 与参考无关：ref_key 用空串占位，两条队列共用同一套信号契约
+NO_REF = ""
 
 
 class _QueueWorker(QRunnable):
@@ -37,6 +40,7 @@ class _QueueWorker(QRunnable):
         self.seq = seq_input
         self.queue = queue
         self.gen = gen
+        self.ref_key = NO_REF    # AnnotateWorker 覆写为参考 accession
         self.signals = queue.signals
 
     def _cancelled(self) -> bool:
@@ -45,24 +49,30 @@ class _QueueWorker(QRunnable):
 
     def _skip(self):
         self.signals.log.emit(f"[{self.seq.seq_id}] Cancelled - skipped")
-        self.signals.skipped.emit(self.gen, self.seq.seq_id)
+        self.signals.skipped.emit(self.gen, self.seq.seq_id, self.ref_key)
 
 
 class AnnotateWorker(_QueueWorker):
+    """单个（序列 × 参考）对的注释：同一序列可对多个参考各跑一次，结果按
+    ref_key（参考 accession）落账，供页面 3 对比与采纳。"""
+
     def __init__(self, seq_input, cfg, queue: "TaskQueue", gen: int,
-                 hits=None, reference_gb_text=None, reference_accession=None):
+                 hits=None, reference_gb_text=None, reference_accession=None,
+                 ref_key: str = ""):
         super().__init__(seq_input, queue, gen)
         self.cfg = cfg
         self.hits = hits
         self.reference_gb_text = reference_gb_text
         self.reference_accession = reference_accession
+        self.ref_key = ref_key
 
     def run(self):  # noqa: D102 线程入口
         try:
             if self._cancelled():
                 self._skip()
                 return
-            self.signals.log.emit(f"[{self.seq.seq_id}] Processing ({self.seq.gene_type})")
+            self.signals.log.emit(f"[{self.seq.seq_id}] Processing ({self.seq.gene_type})"
+                                  f" vs {self.ref_key}")
 
             def cb(stage, frac):
                 self.signals.progress.emit(self.seq.seq_id, stage, float(frac))
@@ -71,13 +81,13 @@ class AnnotateWorker(_QueueWorker):
                 self.seq, self.cfg, hits=self.hits,
                 reference_gb_text=self.reference_gb_text,
                 reference_accession=self.reference_accession, progress=cb)
-            self.signals.finished.emit(self.gen, self.seq.seq_id, res)
-            self.signals.log.emit(f"[{self.seq.seq_id}] Done: status {res.status},"
-                                  f" {len(res.issues)} issue(s)")
+            self.signals.finished.emit(self.gen, self.seq.seq_id, self.ref_key, res)
+            self.signals.log.emit(f"[{self.seq.seq_id}] Done vs {self.ref_key}:"
+                                  f" status {res.status}, {len(res.issues)} issue(s)")
         except Exception:  # 后台线程兜底：任何异常都必须回到 UI 线程
-            self.signals.failed.emit(self.gen, self.seq.seq_id,
+            self.signals.failed.emit(self.gen, self.seq.seq_id, self.ref_key,
                                      traceback.format_exc(limit=3))
-            self.signals.log.emit(f"[{self.seq.seq_id}] Failed")
+            self.signals.log.emit(f"[{self.seq.seq_id}] Failed (vs {self.ref_key})")
         finally:
             self.queue.release(self)
 
@@ -101,10 +111,10 @@ class BlastWorker(_QueueWorker):
                              hitlist_size=self.cfg.hitlist_size)
             preset = get_preset(self.seq.gene_type)
             hits = rank_hits(hits, preset)
-            self.signals.finished.emit(self.gen, self.seq.seq_id, hits)
+            self.signals.finished.emit(self.gen, self.seq.seq_id, NO_REF, hits)
             self.signals.log.emit(f"[{self.seq.seq_id}] BLAST done: {len(hits)} hit(s)")
         except Exception:  # 网络/限流异常统一回 UI 线程
-            self.signals.failed.emit(self.gen, self.seq.seq_id,
+            self.signals.failed.emit(self.gen, self.seq.seq_id, NO_REF,
                                      traceback.format_exc(limit=3))
             self.signals.log.emit(f"[{self.seq.seq_id}] BLAST failed")
         finally:

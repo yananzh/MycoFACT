@@ -147,7 +147,8 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
             if not p3:
                 if len(frame) % 3 != 0:
                     issues.append(Issue("error", "cds_phase",
-                                        "3' end is not partial but CDS length is not a multiple of three"))
+                                        "3' end is not partial but CDS length is not a multiple of "
+                                        "three - possible frameshift (missing/extra base)"))
                 elif aa and aa[-1] != "*" and frame[-3:] not in _STOPS:
                     issues.append(Issue("warning", "no_stop_codon", "3' end complete but no stop codon"))
             if not p5 and frame[:3] != "ATG":

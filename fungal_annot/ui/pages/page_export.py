@@ -1,4 +1,6 @@
-"""P5 导出页（§7.2）：汇总表、输出目录、导出（红灯未确认拦截）。
+"""P5 导出页（§7.2 + 多参考对比）：汇总表、输出目录、导出（红灯未确认拦截）。
+
+每序列一个 .tbl，取其采纳（Adopted）的 variant，直接可提交 BankIt。
 
 BankIt 门户模式：导出只写 .tbl（每条序列一个，含 gene/CDS 等 feature）；
 organism 等来源信息在门户表单录入，因此 table2asn 预检不适用，已移除。
@@ -19,18 +21,20 @@ _N_COLS = 8
 
 class PageExport(QWidget):
     title = "4. Export Results"
+    help_key = "page_export"
 
     def __init__(self, win):
         super().__init__()
         self.win = win
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
         self.table = QTableWidget(0, _N_COLS)
         self.table.setHorizontalHeaderLabels(
             ["Seq ID", "Marker", "Status", "Features", "Reference", "Region",
              "Orientation", "Confirmed"])
+        self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setDefaultAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.table.horizontalHeaderItem(1).setToolTip(MARKER_HINT)
@@ -49,29 +53,19 @@ class PageExport(QWidget):
         layout.addLayout(dir_layout)
 
         btns = QHBoxLayout()
-        self.b_export = QPushButton("Export all (.tbl)")
+        self.b_export = QPushButton("Export Feature Table")
         self.b_export.setObjectName("PrimaryButton")
         self.b_export.setToolTip("Write one five-column .tbl file per sequence")
         self.b_export.clicked.connect(self._export)
         b_open = QPushButton("Open output folder")
         b_open.clicked.connect(self._open_folder)
-        btns.addWidget(self.b_export)
-        btns.addWidget(b_open)
-        btns.addStretch(1)
         b_help = QPushButton("Help")
         b_help.setToolTip("How to use this page: steps, terms, tips")
         b_help.clicked.connect(lambda: show_page_help("page_export", self))
+        btns.addWidget(self.b_export)
+        btns.addWidget(b_open)
         btns.addWidget(b_help)
         layout.addLayout(btns)
-
-        self.lbl_hint = QLabel(
-            "Export writes one five-column .tbl per sequence. Sequences marked "
-            "'Needs review' are blocked until confirmed on the Review page. The .tbl "
-            "contains gene/CDS features only - organism and source modifiers are "
-            "entered in the BankIt portal (GB2sequin-style workflow). Results were "
-            "validated at annotation time and after every edit.")
-        self.lbl_hint.setWordWrap(True)
-        layout.addWidget(self.lbl_hint)
 
     def _pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "Select output directory")
@@ -92,7 +86,9 @@ class PageExport(QWidget):
             hint.setForeground(QColor("#8b949e"))
             self.table.setItem(0, 0, hint)
         for s in self.win.sequences:
-            res = self.win.results.get(s.seq_id)
+            variants = self.win.results.get(s.seq_id) or {}
+            chosen_acc = self.win.chosen_accession(s.seq_id)
+            res = variants.get(chosen_acc) if chosen_acc else None
             row = self.table.rowCount()
             self.table.insertRow(row)
             if res is None:
@@ -117,19 +113,28 @@ class PageExport(QWidget):
             plain = [s.seq_id, s.gene_type, str(len(res.features)),
                      p.reference or "-", p.region or "-", p.orientation]
             for col, text in zip((0, 1, 3, 4, 5, 6), plain):
-                self.table.setItem(row, col, QTableWidgetItem(text))
+                item = QTableWidgetItem(text)
+                if len(variants) > 1:
+                    item.setToolTip(f"{len(variants)} variants compared; exporting "
+                                    f"the adopted one ({chosen_acc})")
+                self.table.setItem(row, col, item)
             self.table.setItem(row, 2, status_item)
             self.table.setItem(row, 7, conf_item)
         # 无结果时禁用导出（点击才弹提示没有意义）
-        has_results = bool(self.win.results)
+        has_results = any(self.win.results.values())
         self.b_export.setEnabled(has_results)
         self.b_export.setToolTip("" if has_results else
                                  "Nothing to export yet - annotate sequences in "
                                  "steps 1-3 first")
 
     def _export(self):
-        blocked = [sid for sid, res in self.win.results.items()
-                   if res.status == "red" and not self.win.confirmed.get(sid)]
+        # 红灯拦截只看采纳（导出）的 variant；未采纳 variant 供比选，不拦
+        blocked = []
+        for s in self.win.sequences:
+            res = self.win.chosen_result(s.seq_id)
+            if res is not None and res.status == "red" \
+                    and not self.win.confirmed.get(s.seq_id):
+                blocked.append(s.seq_id)
         if blocked:
             QMessageBox.warning(
                 self, "Export blocked",
@@ -137,7 +142,7 @@ class PageExport(QWidget):
                 + "\n".join(blocked)
                 + "\n\nUse the 'Confirm for export' button on the Review page.")
             return
-        if not self.win.results:
+        if not any(self.win.results.values()):
             QMessageBox.information(self, "No results", "Nothing to export yet.")
             return
         out = self.dir_edit.text().strip()
@@ -145,8 +150,14 @@ class PageExport(QWidget):
             QMessageBox.warning(self, "Missing directory", "Select an output directory.")
             return
         inputs = list(self.win.sequences)
+        chosen_results = []
+        for s in inputs:
+            variants = self.win.results.get(s.seq_id) or {}
+            if not variants:
+                continue
+            chosen_results.append(variants[self.win.chosen_accession(s.seq_id)])
         try:
-            written = write_outputs(list(self.win.results.values()), out, inputs,
+            written = write_outputs(chosen_results, out, inputs,
                                     with_fsa=False, with_report=False)
         except OSError as ex:
             # 无效盘符/只读目录等写盘失败：弹窗告知，而非全局 excepthook 兜底成
