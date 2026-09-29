@@ -4,6 +4,10 @@
 """
 from dataclasses import dataclass, field
 
+# IUPAC 核苷酸歧义码（与 UI 导入框的裸序列校验同一字符集）；
+# 比对导出的 gap '-' 与终止符 '*' 不在其中，导入时即拒绝
+NUC_CHARS = frozenset("ACGTUNRYKMSWBDHV")
+
 
 @dataclass
 class SeqInput:
@@ -13,7 +17,14 @@ class SeqInput:
     source_qualifiers: dict = field(default_factory=dict)  # key -> str
 
     def __post_init__(self):
-        self.seq = self.seq.upper().replace(" ", "").replace("\n", "")
+        self.seq = "".join(self.seq.upper().split())
+        bad = set(self.seq) - NUC_CHARS
+        if bad:
+            # 尽早失败（导入/改名处即报错），避免流入翻译/导出等深处才炸
+            raise ValueError(
+                f"'{self.seq_id}': non-nucleotide characters in the sequence: "
+                + "".join(sorted(bad))[:10]
+                + " (remove gaps/asterisks, e.g. from an alignment export)")
 
 
 @dataclass

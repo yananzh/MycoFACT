@@ -80,9 +80,16 @@ def save_project(path: str, sequences, hits: dict, selected_ref: dict,
         "settings": settings or {},
     }
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=1)
-    os.replace(tmp, path)   # 原子替换，避免半写文件
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)   # 原子替换，避免半写文件
+    except BaseException:
+        try:
+            os.remove(tmp)      # 中途失败不留 .tmp 垃圾文件
+        except OSError:
+            pass
+        raise
 
 
 def load_project(path: str):

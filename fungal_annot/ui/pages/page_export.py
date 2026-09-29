@@ -1,8 +1,10 @@
 """P5 导出页（§7.2）：汇总表、输出目录、导出（红灯未确认拦截）。
 
-BankIt 门户模式：.tbl 只含 gene/CDS 等 feature（source 由门户表单采集），
-因此 table2asn 预检不再适用，已随自包含模式一并移除。
+BankIt 门户模式：导出只写 .tbl（每条序列一个，含 gene/CDS 等 feature）；
+organism 等来源信息在门户表单录入，因此 table2asn 预检不适用，已移除。
 """
+import os
+
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QLineEdit,
@@ -10,7 +12,7 @@ from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                              QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...services.pipeline import write_outputs
-from ..widgets.help import MARKER_HINT, STATUS_COLOR, STATUS_MARK
+from ..widgets.help import MARKER_HINT, STATUS_COLOR, STATUS_MARK, show_page_help
 
 _N_COLS = 8
 
@@ -47,21 +49,27 @@ class PageExport(QWidget):
         layout.addLayout(dir_layout)
 
         btns = QHBoxLayout()
-        self.b_export = QPushButton("Export all (.tbl + .fsa + report)")
+        self.b_export = QPushButton("Export all (.tbl)")
         self.b_export.setObjectName("PrimaryButton")
+        self.b_export.setToolTip("Write one five-column .tbl file per sequence")
         self.b_export.clicked.connect(self._export)
         b_open = QPushButton("Open output folder")
         b_open.clicked.connect(self._open_folder)
         btns.addWidget(self.b_export)
         btns.addWidget(b_open)
         btns.addStretch(1)
+        b_help = QPushButton("Help")
+        b_help.setToolTip("How to use this page: steps, terms, tips")
+        b_help.clicked.connect(lambda: show_page_help("page_export", self))
+        btns.addWidget(b_help)
         layout.addLayout(btns)
 
         self.lbl_hint = QLabel(
-            "Sequences marked 'Needs review' are blocked from export until confirmed on "
-            "the Review page. The .tbl contains gene/CDS features only - organism and "
-            "source modifiers are entered in the BankIt portal (GB2sequin-style "
-            "workflow). Results were validated at annotation time and after every edit.")
+            "Export writes one five-column .tbl per sequence. Sequences marked "
+            "'Needs review' are blocked until confirmed on the Review page. The .tbl "
+            "contains gene/CDS features only - organism and source modifiers are "
+            "entered in the BankIt portal (GB2sequin-style workflow). Results were "
+            "validated at annotation time and after every edit.")
         self.lbl_hint.setWordWrap(True)
         layout.addWidget(self.lbl_hint)
 
@@ -137,16 +145,24 @@ class PageExport(QWidget):
             QMessageBox.warning(self, "Missing directory", "Select an output directory.")
             return
         inputs = list(self.win.sequences)
-        written = write_outputs(list(self.win.results.values()), out, inputs)
+        try:
+            written = write_outputs(list(self.win.results.values()), out, inputs,
+                                    with_fsa=False, with_report=False)
+        except OSError as ex:
+            # 无效盘符/只读目录等写盘失败：弹窗告知，而非全局 excepthook 兜底成
+            # 状态栏一行 traceback 尾巴
+            QMessageBox.warning(self, "Export failed",
+                                f"Could not write to '{out}':\n{ex}")
+            return
         self.win.last_export_dir = out
         self.win.exported = True
         self.win.update_summary()
-        self.win.log(f"Exported {len(written)} file(s) to {out}")
+        self.win.log(f"Exported {len(written)} .tbl file(s) to {out}")
         QMessageBox.information(self, "Export done",
-                                "Written:\n" + "\n".join(written))
+                                f"Wrote {len(written)} .tbl file(s) to:\n{out}\n\n"
+                                + "\n".join(os.path.basename(w) for w in written))
 
     def _open_folder(self):
-        import os
         out = self.dir_edit.text().strip()
         if out and os.path.isdir(out):
             QDesktopServices.openUrl(QUrl.fromLocalFile(out))

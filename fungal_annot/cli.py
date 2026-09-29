@@ -11,8 +11,11 @@ from .services.pipeline import PipelineConfig, annotate_sequence, write_outputs
 
 def load_fasta(path: str) -> list[SeqInput]:
     seqs = []
-    for rec in SeqIO.parse(path, "fasta"):
-        seqs.append(SeqInput(seq_id=str(rec.id), seq=str(rec.seq).upper()))
+    try:
+        for rec in SeqIO.parse(path, "fasta"):
+            seqs.append(SeqInput(seq_id=str(rec.id), seq=str(rec.seq).upper()))
+    except ValueError as ex:    # SeqInput 的核苷酸字符集校验（gap 等非法字符）
+        raise SystemExit(f"Invalid sequence in FASTA {path}: {ex}")
     if not seqs:
         raise SystemExit(f"No sequences in FASTA: {path}")
     return seqs

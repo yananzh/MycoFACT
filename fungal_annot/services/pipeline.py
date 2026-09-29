@@ -2,7 +2,10 @@
 验证 → 导出文本。核心层复用：CLI 与未来 UI/后台线程共用同一入口。
 """
 import os
+import re
 from dataclasses import dataclass, field
+
+from Bio.Data.CodonTable import TranslationError
 
 from ..core.align_mapper import AlignmentError, build_mapping
 from ..core.blast_runner import BlastError, rank_hits, run_blast
@@ -207,7 +210,9 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
     except (GbFetchError, BlastError, AlignmentError) as ex:
         res.issues.append(Issue("error", "pipeline", str(ex)))
         res.status = "red"
-    except ValueError as ex:
+    except (ValueError, TranslationError) as ex:
+        # TranslationError 不是 ValueError 子类：序列含 gap 等不可翻译字符时
+        # 若不在此兜底，会穿出本函数使 CLI 整批终止（UI 侧仅剩裸堆栈）
         res.issues.append(Issue("error", "pipeline", f"Parse failed: {ex}"))
         res.status = "red"
     return res
@@ -217,33 +222,64 @@ def run_batch(seq_inputs, cfg: PipelineConfig, **kwargs) -> list[SeqResult]:
     return [annotate_sequence(s, cfg, **kwargs) for s in seq_inputs]
 
 
+# Windows 保留文件名字符——其中 : | 是 GenBank Seq ID 的合法字符（validator 的
+# SEQID_RE 放行），直接用作文件名会在导出时抛 WinError 123
+_WIN_UNSAFE = re.compile(r'[<>:"/\\|?*]')
+
+
+def _safe_stem(seq_id: str) -> str:
+    """Seq ID → 文件名安全主名（Windows 保留字符与首尾点/空格处理）。"""
+    return _WIN_UNSAFE.sub("_", seq_id).strip(". ") or "sequence"
+
+
+def _unique_path(out_dir: str, stem: str, ext: str, used: set[str]) -> str:
+    """清洗后的名字若与其他序列冲突（如 'a|b' 与 'a:b' 都变 'a_b'）则追加序号；
+    大小写不敏感比较（Windows 文件系统不区分大小写）。"""
+    path = os.path.join(out_dir, stem + ext)
+    n = 2
+    while path.lower() in used:
+        path = os.path.join(out_dir, f"{stem}_{n}{ext}")
+        n += 1
+    used.add(path.lower())
+    return path
+
+
 def write_outputs(results: list[SeqResult], out_dir: str,
-                  seq_inputs: list[SeqInput] | None = None) -> list[str]:
-    """写出 .tbl/.fsa 配对与验证报告 CSV，返回文件路径列表。
+                  seq_inputs: list[SeqInput] | None = None,
+                  with_fsa: bool = True, with_report: bool = True) -> list[str]:
+    """写出 .tbl（每条序列一个）与可选的 .fsa / 验证报告 CSV，返回文件路径列表。
 
     BankIt 门户模式（GB2sequin 同款工作流）：.tbl 只含 gene/CDS 等 feature，
     不含 source——organism 与来源修饰符在门户表单采集（§7.2 P1/P5）。
+    界面导出只要 .tbl（序列本身已在序列表、验证摘要已在审核页呈现）；
+    with_fsa / with_report 供 CLI 与测试保留完整产物。
     """
     os.makedirs(out_dir, exist_ok=True)
     written = []
     rows = []
     inputs = {s.seq_id: s for s in (seq_inputs or [])}
+    used: set[str] = set()
     for r in results:
-        row = r.report_row()
-        s = inputs.get(r.seq_id)
-        if s:
-            row["length"] = len(s.seq)
-            row["gene_type"] = s.gene_type
-        rows.append(row)
-        tbl = os.path.join(out_dir, f"{r.seq_id}.tbl")
-        fsa = os.path.join(out_dir, f"{r.seq_id}.fsa")
+        if with_report:
+            row = r.report_row()
+            s = inputs.get(r.seq_id)
+            if s:
+                row["length"] = len(s.seq)
+                row["gene_type"] = s.gene_type
+            rows.append(row)
+        stem = _safe_stem(r.seq_id)
+        tbl = _unique_path(out_dir, stem, ".tbl", used)
         with open(tbl, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(r.tbl_text)
-        with open(fsa, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(r.fsa_text)
-        written += [tbl, fsa]
-    report = os.path.join(out_dir, "validation_report.csv")
-    with open(report, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(write_report_csv(rows))
-    written.append(report)
+        written.append(tbl)
+        if with_fsa:
+            fsa = _unique_path(out_dir, stem, ".fsa", used)
+            with open(fsa, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(r.fsa_text)
+            written.append(fsa)
+    if with_report:
+        report = os.path.join(out_dir, "validation_report.csv")
+        with open(report, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(write_report_csv(rows))
+        written.append(report)
     return written

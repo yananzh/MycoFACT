@@ -101,11 +101,19 @@ class MainWindow(QMainWindow):
         self.annotate_queue = TaskQueue(max_threads=2)
         self._blast_pending = 0
         self._annotate_pending = 0
-        for q in (self.blast_queue, self.annotate_queue):
-            q.signals.finished.connect(self._on_worker_finished)
-            q.signals.failed.connect(self._on_worker_failed)
-            q.signals.log.connect(self.log)
-            q.signals.progress.connect(self._on_worker_progress)
+        # 两条队列的回调分开连接（payload 类型不同、排空路径各自独立）；
+        # 计数递减收敛到 _after_*_task，成功/失败/跳过严格对称
+        bq, aq = self.blast_queue.signals, self.annotate_queue.signals
+        bq.finished.connect(self._on_blast_finished)
+        bq.failed.connect(self._on_blast_failed)
+        bq.skipped.connect(self._on_blast_skipped)
+        bq.log.connect(self.log)
+        bq.progress.connect(self._on_worker_progress)
+        aq.finished.connect(self._on_annotate_finished)
+        aq.failed.connect(self._on_annotate_failed)
+        aq.skipped.connect(self._on_annotate_skipped)
+        aq.log.connect(self.log)
+        aq.progress.connect(self._on_worker_progress)
 
         # ---- 布局：顶部水平步骤条 + 中央页面 ----
         self.nav = StepBar()
@@ -345,11 +353,12 @@ class MainWindow(QMainWindow):
         self.blast_queue.reset()
         self._blast_pending = 0
         self._blast_running.clear()
+        gen = self.blast_queue.gen
         for s in self.sequences:
             if s.seq_id in self.hits:
                 continue
             self.blast_queue.submit(BlastWorker(s, self.make_config(),
-                                                self.blast_queue.signals))
+                                                self.blast_queue, gen))
             self._blast_pending += 1
             self._blast_running.add(s.seq_id)
         if self._blast_pending == 0:
@@ -364,6 +373,7 @@ class MainWindow(QMainWindow):
     def start_annotation(self):
         self.annotate_queue.reset()
         self._annotate_pending = 0
+        gen = self.annotate_queue.gen
         for s in self.sequences:
             acc = self.selected_ref.get(s.seq_id)
             hits = None
@@ -381,9 +391,9 @@ class MainWindow(QMainWindow):
                 self.log(f"[{s.seq_id}] no reference chosen - skipped")
                 continue
             self.annotate_queue.submit(AnnotateWorker(s, self.make_config(),
-                                               self.annotate_queue.signals,
-                                               hits=hits,
-                                               reference_accession=ref_acc))
+                                                      self.annotate_queue, gen,
+                                                      hits=hits,
+                                                      reference_accession=ref_acc))
             self._annotate_pending += 1
         if self._annotate_pending == 0:
             self.log("Nothing to annotate.")
@@ -392,56 +402,85 @@ class MainWindow(QMainWindow):
             self.page_reference.progress.setMaximum(self._annotate_pending)
             self.page_reference.progress.setValue(0)
 
-    def _on_worker_finished(self, seq_id: str, payload: object):
-        # 依据 payload 类型区分队列：list=BlastHit 命中，SeqResult=注释结果
-        from ..services.pipeline import SeqResult
-        self.update_summary()
-        if isinstance(payload, list):
-            self._blast_running.discard(seq_id)
-            if any(s.seq_id == seq_id for s in self.sequences):
-                self.hits[seq_id] = payload   # 序列已被丢弃则不落陈旧命中
-            self._blast_pending -= 1
-            self.page_import.progress.setValue(
-                self.page_import.progress.maximum() - self._blast_pending)
-            self.page_import.refresh()        # 清单里该序列的 BLAST 状态即时更新
-            if self._blast_pending <= 0:
-                self.page_import.on_queue_finished()
-                if self.sequences:            # 项目已丢弃则不再强制跳转
-                    self.go_page(1)           # BLAST 排空 → 自动进入参考选择
-        elif isinstance(payload, SeqResult):
-            self.results[seq_id] = payload
-            self._annotate_pending -= 1
-            self.page_reference.progress.setValue(
-                self.page_reference.progress.maximum() - self._annotate_pending)
-            if self._annotate_pending <= 0:
-                self.page_reference.on_queue_finished()
-
-    def _on_worker_failed(self, seq_id: str, message: str):
-        self.log(f"[{seq_id}] Failed: {message.splitlines()[-1] if message else ''}")
+    # gen（批次代次号）不匹配 = 项目丢弃后迟到的回调：整条丢弃，不碰任何状态
+    def _on_blast_finished(self, gen: int, seq_id: str, hits: list):
+        if gen != self.blast_queue.gen:
+            return
         self._blast_running.discard(seq_id)
-        if seq_id in [s.seq_id for s in self.sequences]:
-            if self._blast_pending > 0:
-                self._blast_pending -= 1
-                self.page_import.progress.setValue(
-                    self.page_import.progress.maximum() - self._blast_pending)
-                if self._blast_pending <= 0:
-                    self.page_import.on_queue_finished()
-                    self.go_page(1)         # 失败同样排空 → 跳转
-            elif self._annotate_pending > 0:
-                self._annotate_pending -= 1
-                self.page_reference.progress.setValue(
-                    self.page_reference.progress.maximum() - self._annotate_pending)
-                if self._annotate_pending <= 0:
-                    self.page_reference.on_queue_finished()
+        if any(s.seq_id == seq_id for s in self.sequences):
+            self.hits[seq_id] = hits         # 序列已被丢弃则不落陈旧命中
+        self._after_blast_task()
+
+    def _on_blast_failed(self, gen: int, seq_id: str, message: str):
+        self.log(f"[{seq_id}] Failed: {message.splitlines()[-1] if message else ''}")
+        if gen != self.blast_queue.gen:
+            return
+        self._blast_running.discard(seq_id)
+        self._after_blast_task()
+
+    def _on_blast_skipped(self, gen: int, seq_id: str):
+        if gen != self.blast_queue.gen:
+            return
+        self._blast_running.discard(seq_id)
+        self._after_blast_task()
+
+    def _after_blast_task(self):
+        """每条 BLAST 任务（完成/失败/跳过）统一走这里：计数只在此递减，
+        三条路径严格对称——否则 pending 永不归零，Start 按钮永久禁用。"""
+        self.update_summary()
+        self._blast_pending -= 1
+        self.page_import.progress.setValue(
+            self.page_import.progress.maximum() - max(self._blast_pending, 0))
+        self.page_import.refresh()           # 清单里该序列的 BLAST 状态即时更新
+        if self._blast_pending <= 0:
+            self.page_import.on_queue_finished()
+            if self.sequences:               # 项目已丢弃则不再强制跳转
+                self.go_page(1)              # BLAST 排空 → 自动进入参考选择
+
+    def _on_annotate_finished(self, gen: int, seq_id: str, result: object):
+        if gen != self.annotate_queue.gen:
+            return
+        if any(s.seq_id == seq_id for s in self.sequences):
+            self.results[seq_id] = result    # 守卫与 BLAST 分支一致：删除/改名后不落陈旧结果
+        self._after_annotate_task()
+
+    def _on_annotate_failed(self, gen: int, seq_id: str, message: str):
+        self.log(f"[{seq_id}] Failed: {message.splitlines()[-1] if message else ''}")
+        if gen != self.annotate_queue.gen:
+            return
+        self._after_annotate_task()
+
+    def _on_annotate_skipped(self, gen: int, seq_id: str):
+        if gen != self.annotate_queue.gen:
+            return
+        self._after_annotate_task()
+
+    def _after_annotate_task(self):
+        self.update_summary()
+        self._annotate_pending -= 1
+        self.page_reference.progress.setValue(
+            self.page_reference.progress.maximum() - max(self._annotate_pending, 0))
+        if self._annotate_pending <= 0:
+            self.page_reference.on_queue_finished()
 
     def _on_worker_progress(self, seq_id: str, stage: str, frac: float):
         self.log(f"[{seq_id}] {stage} {frac:.0%}")
 
     # ---- 项目与设置 ----
+    def _abandon_queues(self):
+        """丢弃当前项目态（New/Open/Clear 公共路径）：取消两个队列并作废在途回调，
+        迟到的 finished/failed 不会写进新项目数据、也不会消耗新批次的计数。"""
+        self.blast_queue.invalidate()
+        self.annotate_queue.invalidate()
+        self._blast_pending = 0
+        self._annotate_pending = 0
+        self._blast_running.clear()
+
     def _new_project(self):
         if self.sequences and QMessageBox.question(
                 self, "New", "Discard the current project?") != QMessageBox.StandardButton.Yes:
             return
+        self._abandon_queues()
         self.sequences.clear()
         self.reset_results()
         self.exported = False
@@ -469,13 +508,13 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError, KeyError) as ex:
             QMessageBox.warning(self, "Failed to open", str(ex))
             return
+        self._abandon_queues()          # 在途队列作废：迟到的回调不得写进新项目
         self.sequences = sequences
         self.hits = hits
         self.selected_ref = selected_ref
         self.results = results
         self.confirmed = confirmed      # 红灯确认随项目恢复，导出拦截状态一致
         self.exported = exported
-        self._blast_running.clear()
         self.settings = settings or self.settings
         self.page_import.refresh()
         self.page_reference.refresh()

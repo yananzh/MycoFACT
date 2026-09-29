@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QHeaderView
                              QProgressBar, QTableWidget, QTableWidgetItem,
                              QVBoxLayout, QWidget)
 
-from ..widgets.help import HelpButton, MARKER_HINT
+from ..widgets.help import HelpButton, MARKER_HINT, show_page_help
 from ..widgets.hit_table import HitTable
 
 
@@ -98,6 +98,10 @@ class PageReference(QWidget):
         self.b_annotate.clicked.connect(self._start_annotate)
         btns.addWidget(self.b_annotate)
         btns.addStretch(1)
+        b_help = QPushButton("Help")
+        b_help.setToolTip("How to use this page: steps, terms, tips")
+        b_help.clicked.connect(lambda: show_page_help("page_reference", self))
+        btns.addWidget(b_help)
         layout.addLayout(btns)
 
     # ---- 展示 ----
@@ -114,12 +118,19 @@ class PageReference(QWidget):
             hits = self.win.hits.get(s.seq_id)
             if hits and not self.win.selected_ref.get(s.seq_id):
                 self.win.selected_ref[s.seq_id] = hits[0].accession
-        ready = bool(self.win.sequences) and all(
-            self.win.selected_ref.get(s.seq_id) for s in self.win.sequences)
+        pending = self.win._annotate_pending > 0
+        ready = (bool(self.win.sequences)
+                 and all(self.win.selected_ref.get(s.seq_id) for s in self.win.sequences)
+                 and not pending)       # 队列运行中不得重新点亮（防双重提交）
         self.b_annotate.setEnabled(ready)
-        self.b_annotate.setToolTip("" if ready else
-                                   "Every sequence needs a reference: pick one per row "
-                                   "(defaults to the recommended first hit).")
+        if pending:
+            tip = "Annotation queue is running - wait for it to finish."
+        elif ready:
+            tip = ""
+        else:
+            tip = ("Every sequence needs a reference: pick one per row "
+                   "(defaults to the recommended first hit).")
+        self.b_annotate.setToolTip(tip)
         if self.seq_list.count():
             self.seq_list.setCurrentRow(0)
 
@@ -142,8 +153,9 @@ class PageReference(QWidget):
         sid = self._current_sid()
         if sid:
             self.win.selected_ref[sid] = accession
-            self.b_annotate.setEnabled(True)
-            self.b_annotate.setToolTip("")
+            self.b_annotate.setEnabled(self.win._annotate_pending == 0)
+            if not self.win._annotate_pending:
+                self.b_annotate.setToolTip("")
 
     def _highlight_recommended(self):
         """§6.1 排序第一名加推荐徽章与底色（新手不用懂排序规则）。"""
@@ -185,7 +197,7 @@ class PageReference(QWidget):
         self.b_annotate.setEnabled(False)
 
     def on_queue_finished(self):
-        self.b_annotate.setEnabled(True)
         self.progress.setValue(self.progress.maximum())
+        self.refresh()      # 按当前状态重算按钮可用性（删除/清空后不得凭空点亮）
         if self.win.results:
             self.win.go_page(2)      # 注释完成 → 进入审核页

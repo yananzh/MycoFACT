@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QDialogButtonBox,
                              QToolButton, QVBoxLayout, QWidget)
 
 from ...core.models import SeqInput
-from ..widgets.help import MARKER_HINT
+from ..widgets.help import MARKER_HINT, show_page_help
 
 # 裸序列允许的字符（IUPAC 核苷酸歧义码）
 _DNA_CHARS = set("ACGTUNRYKMSWBDHV")
@@ -196,6 +196,10 @@ class PageImport(QWidget):
         row.addWidget(b_clear)
         row.addWidget(self.b_stop)
         row.addStretch(1)
+        b_help = QPushButton("Help")
+        b_help.setToolTip("How to use this page: steps, terms, tips")
+        b_help.clicked.connect(lambda: show_page_help("page_import", self))
+        row.addWidget(b_help)
         layout.addLayout(row)
 
         # ---- 已导入序列清单：BLAST 状态 / 单条删除 / 双击 Seq ID 改名 ----
@@ -352,6 +356,13 @@ class PageImport(QWidget):
             QMessageBox.warning(self, "Duplicate Seq ID", f"'{new}' already exists.")
             self._revert_cell(row, 0, old)
             return
+        if self.win._blast_pending > 0 or self.win._annotate_pending > 0:
+            # 迟到的 worker 结果按提交时的 seq_id 返回，改名会让它找不到归宿
+            QMessageBox.warning(self, "Queue is running",
+                                "Wait for the BLAST/annotation queue to finish "
+                                "before renaming.")
+            self._revert_cell(row, 0, old)
+            return
         self.win.rename_sequence(old, new)
         self.win.log(f"[{old}] renamed to {new}")
         self.refresh()
@@ -410,6 +421,7 @@ class PageImport(QWidget):
         if self.win.sequences and QMessageBox.question(
                 self, "Clear all", "Remove all imported sequences?") != QMessageBox.StandardButton.Yes:
             return
+        self.win._abandon_queues()      # 在途队列作废，迟到的结果不写回
         self.win.sequences.clear()
         self.win.reset_results()
         self.refresh()

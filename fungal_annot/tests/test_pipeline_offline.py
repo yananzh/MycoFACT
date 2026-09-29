@@ -1,12 +1,13 @@
 """离线端到端（M1 验收路径）：本地参考 GB → 迁移 → .tbl，含 P0 断言。"""
 import io
+import os
 
 from Bio import SeqIO
 
 from fungal_annot.core.align_mapper import revcomp
 from fungal_annot.core.models import SeqInput
-from fungal_annot.services.pipeline import (PipelineConfig, annotate_sequence,
-                                            write_outputs)
+from fungal_annot.services.pipeline import (PipelineConfig, SeqResult,
+                                            annotate_sequence, write_outputs)
 from .conftest import query_plus_insertion
 
 CFG = PipelineConfig(online=False)
@@ -192,3 +193,47 @@ def test_end_to_end_complete_cds_green(ref_record_seq, ref_gb_text):
     assert "1\t400\tCDS" in res.tbl_text
     assert "501\t949\tCDS" in res.tbl_text
     assert "<1\t400" not in res.tbl_text and "949>\t" not in res.tbl_text
+
+
+# ---- 输入兜底修复回归（2026-09-29：非法字符 / 文件名清洗）----
+
+def test_seqinput_rejects_non_nucleotide():
+    """SeqInput 导入期校验：gap/终止符等非法字符即拒绝（快速失败，
+    避免流入翻译/写盘等深处才炸）。"""
+    import pytest
+
+    with pytest.raises(ValueError):
+        SeqInput(seq_id="s", seq="ACGT-ACGT")     # 比对软件导出的 gap
+    with pytest.raises(ValueError):
+        SeqInput(seq_id="s", seq="ACGT*")         # 翻译终止符
+    s = SeqInput(seq_id="s", seq=" acgt\r\nn ")   # 空白剥除后合法
+    assert s.seq == "ACGTN"
+
+
+def test_gap_in_query_becomes_structured_error(ref_record_seq, ref_gb_text):
+    """回归：查询含 '-'（比对导出 gap）→ 结构化 error，不抛 TranslationError
+    使 CLI 整批崩溃（TranslationError 不是 ValueError 子类，此前无人兜底）。"""
+    seq, _ = ref_record_seq
+    s = _mk(seq[300:1600])
+    s.seq = s.seq[:500] + "-" + s.seq[501:]   # 绕过导入校验（落在 CDS 读码框内）
+    res = annotate_sequence(s, CFG, reference_gb_text=ref_gb_text)
+    assert res.status == "red"
+    assert any(i.code == "invalid_residue" for i in res.issues)
+
+
+def test_write_outputs_sanitises_windows_unsafe_seq_id(tmp_path):
+    """回归：Seq ID 含 '|' / ':'（GenBank 合法、Windows 非法文件名字符）时
+    导出不崩溃，且清洗后同名的两条不得互相覆盖。"""
+    res1 = SeqResult(seq_id="gi|123|ref|X.1", tbl_text=">Feature gi|123|ref|X.1\n")
+    res2 = SeqResult(seq_id="chr1:100-200", tbl_text=">Feature chr1:100-200\n")
+    res3 = SeqResult(seq_id="a|b", tbl_text=">Feature a|b\n")
+    res4 = SeqResult(seq_id="a:b", tbl_text=">Feature a:b\n")
+    written = write_outputs([res1, res2, res3, res4], str(tmp_path))
+    names = {os.path.basename(p) for p in written}
+    # '|' 与 ':' 都替换为 '_'；"a|b" 与 "a:b" 清洗后冲突 → 后者追加序号（tbl/fsa 同步）
+    assert names == {"gi_123_ref_X.1.tbl", "gi_123_ref_X.1.fsa",
+                     "chr1_100-200.tbl", "chr1_100-200.fsa",
+                     "a_b.tbl", "a_b.fsa", "a_b_2.tbl", "a_b_2.fsa",
+                     "validation_report.csv"}
+    assert (tmp_path / "a_b.tbl").read_text(encoding="utf-8") == ">Feature a|b\n"
+    assert (tmp_path / "a_b_2.tbl").read_text(encoding="utf-8") == ">Feature a:b\n"

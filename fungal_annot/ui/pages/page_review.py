@@ -13,7 +13,8 @@ from ...core.validator import status_of, validate
 from ..widgets.feature_table import FeatureTable
 from ..widgets.help import (STATUS_COLOR as _STATUS_COLOR,
                             STATUS_HINT as _STATUS_LABEL,
-                            STATUS_MARK as _STATUS_MARK, show_help)
+                            STATUS_MARK as _STATUS_MARK,
+                            show_help, show_page_help)
 _SEVERITY = {"error": ("⛔ ", QColor("#cf222e")),
              "warning": ("⚠ ", QColor("#9a6700")),
              "info": ("ℹ ", QColor("#57606a"))}
@@ -206,6 +207,10 @@ class PageReview(QWidget):
         toolbar.addWidget(b_align)
         toolbar.addWidget(self.b_ref_feat)
         toolbar.addStretch(1)
+        b_help = QPushButton("Help")
+        b_help.setToolTip("How to use this page: steps, terms, tips")
+        b_help.clicked.connect(lambda: show_page_help("page_review", self))
+        toolbar.addWidget(b_help)
         right.addLayout(toolbar)
 
         self.lbl_issues = QLabel("Issues")
@@ -273,6 +278,7 @@ class PageReview(QWidget):
     # ---- 数据加载 ----
     def refresh(self):
         self._update_ribbon()
+        keep = self.current          # clear() 会把 currentRow 重置为 -1，先记下原序列
         self.seq_list.blockSignals(True)
         self.seq_list.clear()
         for s in self.win.sequences:
@@ -285,7 +291,9 @@ class PageReview(QWidget):
             self.seq_list.addItem(item)
         self.seq_list.blockSignals(False)
         if self.seq_list.count():
-            row = max(0, self.seq_list.currentRow())
+            # 回到原序列（Re-check all / 确认导出 / 切页后浏览位置不丢）；不在了则回第一行
+            row = next((i for i in range(self.seq_list.count())
+                        if self.seq_list.item(i).data(Qt.ItemDataRole.UserRole) == keep), 0)
             self.seq_list.setCurrentRow(row)
 
     def _refresh_seq_row(self, seq_id: str):

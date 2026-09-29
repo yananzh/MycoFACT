@@ -6,6 +6,7 @@
 """
 import re
 
+from Bio.Data.CodonTable import TranslationError
 from Bio.Seq import Seq
 
 from .feature_transfer import _spliced_cds, resolve_transl_table
@@ -122,7 +123,16 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
             cds_seq = _spliced_cds(f.parts, f.strand, seq)
             cs = int(f.qualifiers.get("codon_start", ["1"])[0])
             frame = cds_seq[cs - 1:]
-            aa = _translate(frame, table)
+            try:
+                aa = _translate(frame, table)
+            except TranslationError:
+                # 含不可翻译字符（如比对导出的 gap '-'）：结构化报错，跳过该 CDS
+                # 的后续检查，而不是让 TranslationError 穿出管线使整批崩溃
+                issues.append(Issue(
+                    "error", "invalid_residue",
+                    "CDS contains characters that cannot be translated "
+                    "(e.g. alignment gaps '-') - clean up the sequence first"))
+                continue
             core = aa[:-1] if aa.endswith("*") else aa
             if "*" in core:
                 level = "error" if certain else "warning"
@@ -145,12 +155,18 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
             # 蛋白回检：与参考蛋白 pairwise identity（§6.6）
             if ref_f is not None and aa:
                 ref_cs = int((ref_f.qualifiers.get("codon_start") or ["1"])[0])
-                ref_aa = _translate(_spliced_cds(ref_f.parts, ref_f.strand, ref_seq)[ref_cs - 1:], table)
-                ident = _aa_identity(core, ref_aa[:-1] if ref_aa.endswith("*") else ref_aa)
-                if ident is not None and ident < 0.95:
-                    issues.append(Issue(
-                        "warning", "protein_identity",
-                        f"Protein identity vs reference {ident:.1%} < 95%"))
+                try:
+                    ref_aa = _translate(
+                        _spliced_cds(ref_f.parts, ref_f.strand, ref_seq)[ref_cs - 1:],
+                        table)
+                except TranslationError:    # 参考含异常字符 → 跳过回检，不阻塞验证
+                    ref_aa = None
+                if ref_aa is not None:
+                    ident = _aa_identity(core, ref_aa[:-1] if ref_aa.endswith("*") else ref_aa)
+                    if ident is not None and ident < 0.95:
+                        issues.append(Issue(
+                            "warning", "protein_identity",
+                            f"Protein identity vs reference {ident:.1%} < 95%"))
 
     # ---- Nucleotide identity 门禁：非编码用全局，CDS 按 exon 加权（§6.6）----
     if new_cds:

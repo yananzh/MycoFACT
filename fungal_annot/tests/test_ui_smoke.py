@@ -136,7 +136,7 @@ def test_blast_failure_drain_jumps(window):
     window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
     window.page_import.progress.setMaximum(1)
     window._blast_pending = 1
-    window._on_worker_failed("s1", "boom")
+    window._on_blast_failed(0, "s1", "boom")     # gen 0 == 当前批次
     assert window._blast_pending == 0
     assert window.stack.currentIndex() == 1
     assert not window.page_import.b_stop.isEnabled()
@@ -152,7 +152,7 @@ def test_blast_success_drain_jumps(window):
     window._blast_pending = 1
     hit = BlastHit(accession="AA000001", title="hit", pident=99.0,
                    qcovs=100.0, subject_len=100, flags={})
-    window._on_worker_finished("s1", [hit])
+    window._on_blast_finished(0, "s1", [hit])
     assert window._blast_pending == 0
     assert window.hits["s1"] == [hit]
     assert window.stack.currentIndex() == 1
@@ -168,9 +168,9 @@ def test_blast_finish_after_discard_stays_put(window):
     window.page_import.progress.setMaximum(1)
     window._blast_pending = 1
     window.sequences.clear()               # 模拟运行中 New/Clear（绕过 QMessageBox）
-    window._on_worker_finished("s1", [BlastHit(accession="AA000001", title="hit",
-                                               pident=99.0, qcovs=100.0,
-                                               subject_len=100, flags={})])
+    window._on_blast_finished(0, "s1", [BlastHit(accession="AA000001", title="hit",
+                                                 pident=99.0, qcovs=100.0,
+                                                 subject_len=100, flags={})])
     assert window._blast_pending == 0
     assert "s1" not in window.hits
     assert window.stack.currentIndex() == 0
@@ -407,11 +407,13 @@ def test_import_page_sequence_list_and_buttons(window):
             for i in range(page.seq_table.columnCount())] == \
         ["Seq ID", "Length (bp)", "Marker", "BLAST", ""]
     buttons = page.findChildren(QPushButton)
-    assert [b.text() for b in buttons] == ["BLAST", "Browse", "Example", "Clear", "STOP"]
+    assert [b.text() for b in buttons] == ["BLAST", "Browse", "Example", "Clear",
+                                           "STOP", "Help"]
     assert buttons[0].objectName() == "PrimaryButton"      # BLAST 主行动
     assert all(b.objectName() == "" for b in buttons[1:])  # 其余默认描边
-    widths = {(b.minimumWidth(), b.maximumWidth()) for b in buttons}   # 五按钮等宽
-    assert len(widths) == 1 and buttons[0].minimumWidth() == buttons[0].maximumWidth()
+    actions = buttons[:5]                                  # 五个动作按钮等宽（Help 除外）
+    widths = {(b.minimumWidth(), b.maximumWidth()) for b in actions}
+    assert len(widths) == 1 and actions[0].minimumWidth() == actions[0].maximumWidth()
     assert not hasattr(page, "_remove_selected") and not hasattr(page, "_paste_clipboard")
 
 
@@ -890,6 +892,35 @@ def test_review_issues_hidden_when_clean(window, ref_record_seq, ref_gb_text, mo
     assert not page.issue_list.isVisibleTo(page)
 
 
+def test_export_page_writes_tbl_only(window, tmp_path, ref_record_seq, ref_gb_text, monkeypatch):
+    """P5 导出只写 .tbl（每条序列一个）：不再产生 .fsa 与验证报告 CSV。"""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import annotate_sequence
+
+    seq, _ = ref_record_seq
+    window.add_sequence(SeqInput(seq_id="e1", seq=seq[300:1600], gene_type="tef1"))
+    window.results["e1"] = annotate_sequence(window.sequences[0], window.make_config(),
+                                             reference_gb_text=ref_gb_text)
+    page = window.page_export
+    page.refresh()
+    out = tmp_path / "only_tbl"
+    page.dir_edit.setText(str(out))
+    # 屏蔽导出成功后的模态弹窗（离屏环境下 exec() 永远阻塞）
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information",
+                        staticmethod(lambda *a, **k: shown.append(a[1] if len(a) > 1 else "")
+                                     or QMessageBox.StandardButton.Ok))
+    page._export()
+
+    files = sorted(p.name for p in out.iterdir())
+    assert files == ["e1.tbl"], files
+    content = (out / "e1.tbl").read_text(encoding="utf-8")
+    assert content.startswith(">Feature e1") and "CDS" in content
+    assert shown and "Export done" in shown[0]
+
+
 def test_recheck_preserves_pipeline_issues(window, ref_record_seq, ref_gb_text):
     """重验只替换 validate() 的输出：管线早期/迁移期提示（base_issues）不得丢失，
     否则初次注释的 warning 在 Re-check all / 自动重验后凭空消失、黄变绿。"""
@@ -923,3 +954,169 @@ def test_recheck_preserves_pipeline_issues(window, ref_record_seq, ref_gb_text):
     page._auto_revalidate()
     codes = {i.code for i in window.results["b1"].issues}
     assert "exon_outside_aligned" in codes
+
+
+def test_page_help_buttons_and_guides(window):
+    """四页按钮区各有一个 Help 按钮；PAGE_HELP 四篇指南可构建富文本弹窗。"""
+    from PyQt6.QtWidgets import QPushButton
+
+    from fungal_annot.ui.pages.page_export import PageExport as _PE
+    from fungal_annot.ui.pages.page_import import PageImport as _PI
+    from fungal_annot.ui.pages.page_reference import PageReference as _PR
+    from fungal_annot.ui.pages.page_review import PageReview as _PV
+    from fungal_annot.ui.widgets.help import PAGE_HELP, build_page_help_dialog
+
+    assert set(PAGE_HELP) == {"page_import", "page_reference",
+                              "page_review", "page_export"}
+    for page, term in ((window.page_import, "page_import"),
+                       (window.page_reference, "page_reference"),
+                       (window.page_review, "page_review"),
+                       (window.page_export, "page_export")):
+        helps = [b for b in page.findChildren(QPushButton) if b.text() == "Help"]
+        assert len(helps) == 1, (type(page).__name__, helps)
+    # 每篇指南含三段结构与关键内容，弹窗可构建
+    dlg = build_page_help_dialog("page_import", window)
+    assert dlg.windowTitle() == "How to use: Import & BLAST"
+    for term, must_have in (("page_import", "BLAST"),
+                            ("page_reference", "Use"),
+                            ("page_review", "Needs review"),
+                            ("page_export", "BankIt")):
+        html = PAGE_HELP[term][1]
+        assert "How to use" in html and "Terms" in html and "Tips" in html
+        assert must_have in html
+
+
+# ---- 队列生命周期修复回归（2026-09-29：STOP 取消 / 失败对称 / 项目切换作废）----
+
+def test_stop_cancels_remaining_blast_tasks(qtbot, window, monkeypatch):
+    """STOP：进行中的一条做完后，其余任务在 run() 入口被跳过（skipped），
+    pending 排空、STOP 复位——此前 cancel 标志无人读取，STOP 完全无效。"""
+    import threading
+
+    from fungal_annot.core.models import SeqInput
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_run_blast(seq, **kw):
+        entered.set()
+        release.wait(10)        # 模拟阻塞中的在线 BLAST（进行中无法中断）
+        return []
+    monkeypatch.setattr("fungal_annot.services.worker.run_blast", fake_run_blast)
+
+    window.settings["email"] = "a@example.org"
+    for i in range(3):
+        window.add_sequence(SeqInput(seq_id=f"c{i}", seq="ACGT" * 20, gene_type="tef1"))
+    window.page_import.refresh()
+    window.page_import._start()
+    assert window._blast_pending == 3
+    qtbot.waitUntil(entered.is_set, timeout=5000)   # 第一条已进入（阻塞中的）BLAST
+    window.page_import._cancel()                    # STOP
+    release.set()                                   # 放行进行中的那条
+    qtbot.waitUntil(lambda: window._blast_pending <= 0, timeout=10000)
+    assert window._blast_pending == 0
+    assert not window.page_import.b_stop.isEnabled()
+    assert "c0" in window.hits                      # 进行中的那条正常返回
+    assert "c1" not in window.hits and "c2" not in window.hits   # 其余被跳过
+
+
+def test_annotate_failure_drains_queue(window):
+    """注释 worker 失败同样消耗 pending（成功/失败路径对称，此前失败分支
+    要求序列仍存在才递减，删除序列 + 失败会让界面永久卡死）。"""
+    window.page_reference.progress.setMaximum(1)
+    window._annotate_pending = 1
+    window._on_annotate_failed(0, "s1", "boom")
+    assert window._annotate_pending == 0
+
+
+def test_start_annotate_disabled_while_queue_running(window):
+    """注释队列运行中 refresh() 不得重新点亮 Start Annotation（防双重提交，
+    与第 1 页 test_start_blast_disabled_while_queue_running 对称）。"""
+    from fungal_annot.core.blast_runner import BlastHit
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
+    window.hits["s1"] = [BlastHit(accession="AA000001", title="hit", pident=99.0,
+                                  qcovs=100.0, subject_len=60, flags={})]
+    window._annotate_pending = 1
+    window.page_reference.refresh()
+    assert not window.page_reference.b_annotate.isEnabled()
+    window._annotate_pending = 0
+    window.page_reference.refresh()
+    assert window.page_reference.b_annotate.isEnabled()
+
+
+def test_abandon_queues_ignores_late_callbacks(window):
+    """项目丢弃（New/Open/Clear 公共路径）后在途回调按代次号作废：
+    迟到的 finished 不写陈旧命中、不消耗计数、不触发跳页。"""
+    from fungal_annot.core.blast_runner import BlastHit
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 60, gene_type="tef1"))
+    window.page_import.progress.setMaximum(1)
+    window._blast_pending = 1
+    window._abandon_queues()
+    assert window._blast_pending == 0
+    stale_gen = window.blast_queue.gen - 1
+    window._on_blast_finished(stale_gen, "s1",
+                              [BlastHit(accession="AA000001", title="hit", pident=99.0,
+                                        qcovs=100.0, subject_len=60, flags={})])
+    assert "s1" not in window.hits
+    assert window._blast_pending == 0
+    assert window.stack.currentIndex() == 0
+
+
+def test_late_annotate_result_for_removed_sequence_dropped(window, ref_record_seq,
+                                                           ref_gb_text):
+    """回归：注释运行中删除序列后，迟到的结果不得写入 results——否则导出页
+    会为界面上已不存在的序列写出 .tbl（幽灵文件）。"""
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import annotate_sequence
+
+    seq, _ = ref_record_seq
+    s = SeqInput(seq_id="u9", seq=seq[300:1600], gene_type="tef1")
+    window.add_sequence(s)
+    res = annotate_sequence(s, window.make_config(), reference_gb_text=ref_gb_text)
+    window.page_reference.progress.setMaximum(1)
+    window._annotate_pending = 1
+    window.sequences.clear()               # 模拟注释运行中删除该序列
+    window._on_annotate_finished(0, "u9", res)
+    assert "u9" not in window.results
+    assert window._annotate_pending == 0
+
+
+def test_rename_blocked_while_queue_running(window, monkeypatch):
+    """队列运行中禁止改名：worker 结果按提交时的 seq_id 返回，改名会让它找不到归宿。"""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="rn1", seq="ACGT" * 10, gene_type="tef1"))
+    window.page_import.refresh()
+    window._annotate_pending = 1
+    warned = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        staticmethod(lambda *a, **k: warned.append(k.get("text", a[2] if len(a) > 2 else ""))
+                     or QMessageBox.StandardButton.Ok))
+    page = window.page_import
+    page.seq_table.item(0, 0).setText("rn2")       # itemChanged → 守卫 → 拒绝
+    assert window.sequences[0].seq_id == "rn1"     # 未改名
+    assert warned and "renaming" in warned[0]      # 弹窗提示等待队列
+    assert page.seq_table.item(0, 0).text() == "rn1"   # 单元格回滚
+
+
+def test_review_refresh_preserves_selection(window):
+    """回归：refresh 后选中停在原序列——此前 clear() 之后才读 currentRow（恒 -1），
+    Re-check all / 确认导出 / 切页后浏览位置都会跳回第 1 条。"""
+    from fungal_annot.core.models import SeqInput
+
+    for sid in ("rv1", "rv2", "rv3"):
+        window.add_sequence(SeqInput(seq_id=sid, seq="ACGT" * 30, gene_type="tef1"))
+    page = window.page_review
+    page.refresh()
+    page.seq_list.setCurrentRow(2)
+    assert page.current == "rv3"
+    page.refresh()                                  # Re-check all / 确认后都会走这里
+    assert page.seq_list.currentRow() == 2
+    assert page.current == "rv3"
