@@ -29,6 +29,9 @@ online_test/out2/
 # 根目录调试截图（_*.png）
 /_*.png
 
+# 内部设计文档（不公开）
+真菌多基因序列FeatureTable工具-开发计划.md
+
 # 系统文件
 Thumbs.db
 .DS_Store
