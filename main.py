@@ -6,7 +6,25 @@
 import os
 import sys
 
+from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QIcon
+
 from fungal_annot.paths import resource_path
+
+
+def _set_app_icon(app) -> None:
+    """应用窗口/任务栏图标（各尺寸 PNG 逐个注册，三平台通吃）。
+
+    打包后图标随 spec datas 落在资源目录；缺失时静默跳过，不影响启动。
+    """
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256, 512):
+        path = resource_path("fungal_annot", "resources", "icons",
+                             f"mycofact_{size}.png")
+        if os.path.isfile(path):
+            icon.addFile(path, QSize(size, size))
+    if not icon.isNull():
+        app.setWindowIcon(icon)
 
 
 def main() -> int:
@@ -19,6 +37,7 @@ def main() -> int:
     from fungal_annot.ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
+    _set_app_icon(app)
     qss = resource_path("fungal_annot", "resources", "style.qss")
     if os.path.isfile(qss):
         with open(qss, encoding="utf-8") as fh:

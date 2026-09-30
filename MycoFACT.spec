@@ -13,6 +13,8 @@ a = Analysis(
     datas=[
         ("fungal_annot/resources/presets.json", "fungal_annot/resources"),
         ("fungal_annot/resources/style.qss", "fungal_annot/resources"),
+        # 运行时窗口图标（main._set_app_icon / About 弹窗按 resource_path 取用）
+        ("fungal_annot/resources/icons", "fungal_annot/resources/icons"),
         ("demo/example.fasta", "demo"),
     ],
     hiddenimports=[
@@ -22,6 +24,11 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
+
+exe_kwargs = {}
+if sys.platform == "win32":
+    # Explorer/任务栏显示的 EXE 图标（多尺寸 .ico，scripts/build_icons.py 生成）
+    exe_kwargs["icon"] = "fungal_annot/resources/icons/mycofact.ico"
 
 exe = EXE(
     pyz,
@@ -33,6 +40,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    **exe_kwargs,
 )
 
 coll = COLLECT(
@@ -45,4 +53,8 @@ coll = COLLECT(
 )
 
 if sys.platform == "darwin":
-    app = BUNDLE(coll, name="MycoFACT.app")
+    app = BUNDLE(
+        coll,
+        name="MycoFACT.app",
+        icon="fungal_annot/resources/icons/mycofact.icns",
+    )

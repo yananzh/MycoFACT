@@ -4,22 +4,35 @@
 信号回 UI 线程——已最新就地提示，有新版弹 UpdateAvailableDialog（一键打开 Releases
 下载页），失败 QMessageBox 简短提示；界面全程不阻塞，失败不影响其他功能。
 """
+import os
 import traceback
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFrame, QHBoxLayout,
+from PyQt6.QtGui import QDesktopServices, QPixmap
+from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout,
                              QLabel, QMessageBox, QPushButton, QVBoxLayout)
 
+from ...paths import resource_path
 from ..icons import ACCENT, icon
 from .help import DISCLAIMER
 
 REPO_URL = "https://github.com/yananzh/MycoFACT"
 
 
+def _logo_pixmap(size: int):
+    """应用 logo 位图；图标资源缺失时退回 qtawesome 的 dna 占位图标。"""
+    path = resource_path("fungal_annot", "resources", "icons",
+                         "mycofact_256.png")
+    if os.path.isfile(path):
+        return QPixmap(path).scaled(
+            size, size, Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation)
+    return icon("fa5s.dna", color=ACCENT).pixmap(size, size)
+
+
 # ---- About 弹窗 -------------------------------------------------------------
 class AboutDialog(QDialog):
-    """图标 + 名称/版本 + 一句简介 + 更新/仓库/关闭按钮 + 底部免责声明。"""
+    """图标 + 名称/版本 + 一句简介 + 仓库链接 + 居中更新按钮 + 底部免责声明。"""
 
     def __init__(self, version: str, parent=None):
         super().__init__(parent)
@@ -34,7 +47,7 @@ class AboutDialog(QDialog):
 
         head = QHBoxLayout()
         logo = QLabel()
-        logo.setPixmap(icon("fa5s.dna", color=ACCENT).pixmap(44, 44))
+        logo.setPixmap(_logo_pixmap(44))
         head.addWidget(logo, 0, Qt.AlignmentFlag.AlignTop)
         names = QVBoxLayout()
         title = QLabel("MycoFACT")
