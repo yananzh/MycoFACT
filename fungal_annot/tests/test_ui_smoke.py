@@ -1377,3 +1377,47 @@ def test_blast_queue_concurrency_setting(window):
     # 模拟 _open_settings 保存后的生效路径（不弹对话框）
     window.blast_queue.set_max_threads(window._blast_concurrency())
     assert window.blast_queue._pool.maxThreadCount() == 4
+
+
+# ---- Clear 按钮回归（粘贴未导入时也必须可清空）----
+
+def test_clear_clears_paste_box(window):
+    """粘贴未 BLAST 时点 Clear：输入框文本一并清空（回归：此前只清已入库
+    序列，框内文本原样保留，Clear 看起来无效）。"""
+    window.page_import.import_box.setPlainText(">s1\nATGC")
+    window.page_import._clear()
+    assert window.page_import.import_box.toPlainText() == ""
+    assert window.sequences == []
+
+
+def test_clear_removes_imported_sequences_and_box(monkeypatch, window):
+    """已导入序列 + 框内还有文本时点 Clear（确认弹 Yes）：序列、hits、
+    输入框全部清空，STOP 一并禁用。"""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="c1", seq="ACGT" * 20, gene_type="tef1"))
+    window.hits["c1"] = []
+    window.page_import.import_box.setPlainText(">s2\nTTGC")
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    window.page_import._clear()
+    assert window.sequences == [] and "c1" not in window.hits
+    assert window.page_import.import_box.toPlainText() == ""
+    assert not window.page_import.b_stop.isEnabled()
+
+
+def test_clear_decline_keeps_everything(monkeypatch, window):
+    """确认弹 No：序列与输入框原样保留。"""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from fungal_annot.core.models import SeqInput
+
+    window.add_sequence(SeqInput(seq_id="c2", seq="ACGT" * 20, gene_type="tef1"))
+    window.page_import.import_box.setPlainText(">s3\nTTGC")
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.No))
+    window.page_import._clear()
+    assert [s.seq_id for s in window.sequences] == ["c2"]
+    assert window.page_import.import_box.toPlainText() == ">s3\nTTGC"

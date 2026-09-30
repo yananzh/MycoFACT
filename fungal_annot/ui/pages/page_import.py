@@ -176,7 +176,7 @@ class PageImport(QWidget):
                              "Colletotrichum marker sequences) into the box, then click BLAST")
         b_example.clicked.connect(self._load_example)
         b_clear = QPushButton("Clear")
-        b_clear.setToolTip("Remove all imported sequences")
+        b_clear.setToolTip("Clear the input box and remove all imported sequences")
         b_clear.clicked.connect(self._clear)
         self.b_stop = QPushButton("STOP")
         self.b_stop.clicked.connect(self._cancel)
@@ -412,10 +412,20 @@ class PageImport(QWidget):
         self.refresh()
 
     def _clear(self):
+        """清空导入输入框 + 已导入序列。只清已入库列表而不清框内文本，
+        会让"粘贴后未 BLAST 就点 Clear"看起来完全无效。"""
+        has_text = bool(self.import_box.toPlainText().strip())
         if self.win.sequences and QMessageBox.question(
-                self, "Clear all", "Remove all imported sequences?") != QMessageBox.StandardButton.Yes:
+                self, "Clear all",
+                "Remove all imported sequences and clear the input box?") \
+                != QMessageBox.StandardButton.Yes:
             return
         self.win._abandon_queues()      # 在途队列作废，迟到的结果不写回
+        self.b_stop.setEnabled(False)   # 队列已作废，STOP 不再可用
+        had_seqs = bool(self.win.sequences)
         self.win.sequences.clear()
         self.win.reset_results()
+        self.import_box.clear()         # textChanged → refresh
+        if has_text or had_seqs:
+            self.win.log("Cleared the input box and all imported sequences")
         self.refresh()
