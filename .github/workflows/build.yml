@@ -10,7 +10,24 @@ permissions:
   contents: write
 
 jobs:
+  # 发布产物门禁：测试不过不构建（tag 可从任意 commit 打出，不能依赖 CI 恰好已过）
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      # headless Linux 上 PyQt6 离屏渲染所需的系统库
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3 \
+            libfontconfig1 libxcb-cursor0
+      - run: pytest -q
+
   build:
+    needs: test
     strategy:
       matrix:
         include:
