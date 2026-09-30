@@ -3,6 +3,7 @@
 - `python main.py` → 启动 PyQt6 图形界面（M3–M5）
 - `python main.py run|presets …` → CLI（M1–M2，见 fungal_annot/cli.py）
 """
+import os
 import sys
 
 from fungal_annot.paths import resource_path
