@@ -19,8 +19,8 @@
 
 **MycoFACT**（**F**ungal **F**eature **A**nnotation & **C**omparison **T**ool，包名
 `fungal_annot`）为真菌 marker 基因序列准备 NCBI BankIt 提交材料。选定参考序列后，
-参考 GenBank 记录的注释会按比对坐标迁移到查询序列上——自动产出五列 feature
-table（.tbl）、配套 .fsa 文件与验证报告，直接可用于提交。
+参考 GenBank 记录的注释会按比对坐标迁移到查询序列上——自动产出可直接提交的五列
+feature table（.tbl）。命令行额外产出配套 .fsa 文件与验证报告；界面导出仅 .tbl。
 
 支持基因：LSU、SSU、tef1、rpb1、rpb2、tub2、act、cal、chs，以及线粒体 marker
 （mtLSU、mtSSU、cox1、cob、nad1/nad2/nad4/nad5、atp6、rps3）。

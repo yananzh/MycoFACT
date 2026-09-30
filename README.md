@@ -20,8 +20,9 @@ English | [简体中文](./README.zh-CN.md)
 **MycoFACT** (**F**ungal **F**eature **A**nnotation & **C**omparison **T**ool, package
 `fungal_annot`) prepares fungal marker gene sequences for NCBI BankIt submission. Pick a
 reference record, and its GenBank annotations are transferred onto your query sequences
-along the alignment coordinates — producing the five-column feature tables (.tbl), paired
-.fsa files, and a validation report, ready to submit.
+along the alignment coordinates — producing the five-column feature tables (.tbl) ready
+for submission. The CLI additionally emits paired .fsa files and a validation report;
+the GUI exports .tbl only.
 
 Supported markers: LSU, SSU, tef1, rpb1, rpb2, tub2, act, cal, chs, and mitochondrial
 markers (mtLSU, mtSSU, cox1, cob, nad1/nad2/nad4/nad5, atp6, rps3).
