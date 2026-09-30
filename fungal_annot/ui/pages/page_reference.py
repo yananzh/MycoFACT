@@ -246,4 +246,9 @@ class PageReference(QWidget):
         self.progress.setValue(self.progress.maximum())
         self.refresh()      # 按当前状态重算按钮可用性（删除/清空后不得凭空点亮）
         if self.win.results:
-            self.win.go_page(2)      # 注释完成 → 进入审核页
+            # 仅当用户仍停在参考选择页时自动进入审核页；批量任务期间用户可能
+            # 已切到别页工作，无条件跳转会打断操作（BLAST 排空同理）
+            if self.win.stack.currentIndex() == 1:
+                self.win.go_page(2)      # 注释完成 → 进入审核页
+            else:
+                self.win.log("Annotation queue finished - continue on step 3 (review)")

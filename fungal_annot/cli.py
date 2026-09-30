@@ -16,6 +16,8 @@ def load_fasta(path: str) -> list[SeqInput]:
             seqs.append(SeqInput(seq_id=str(rec.id), seq=str(rec.seq).upper()))
     except ValueError as ex:    # SeqInput 的核苷酸字符集校验（gap 等非法字符）
         raise SystemExit(f"Invalid sequence in FASTA {path}: {ex}")
+    except OSError as ex:       # 路径不存在/是目录等 → 同样给出友好退出而非 traceback
+        raise SystemExit(f"Cannot read FASTA {path}: {ex}")
     if not seqs:
         raise SystemExit(f"No sequences in FASTA: {path}")
     return seqs

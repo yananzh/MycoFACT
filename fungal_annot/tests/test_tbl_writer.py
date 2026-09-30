@@ -29,12 +29,14 @@ def test_plus_join_and_partial():
 
 def test_minus_descending_and_markers():
     f = Feature(ftype="CDS", strand=-1,
-                parts=[FeaturePart(452, 900),
+                parts=[FeaturePart(452, 900, partial_low=True),
                        FeaturePart(1001, 1300, partial_high=True)],
                 qualifiers={})
     lines = feature_lines(f)
-    assert lines[0] == ">1300\t1001\tCDS"   # 互补链降序；5' partial 在高坐标端
-    assert lines[1] == "900\t452"           # 后续区段行不带 key
+    # NCBI 规范：'<'（5' partial）恒在第 1 列、'>'（3' partial）恒在第 2 列，
+    # 与链无关；互补链降序书写 → 高坐标端（负链 5' 端）落在第 1 列
+    assert lines[0] == "<1300\t1001\tCDS"
+    assert lines[1] == "900\t>452"          # 低坐标端（负链 3' 端）partial 标在第 2 列
 
 
 def test_source_first_and_gene_before_cds():

@@ -175,5 +175,6 @@ class TaskQueue:
         self.cancel_requested = False
         self.gen += 1
 
-    def wait(self, msecs: int = 30000):
-        self._pool.waitForDone(msecs)
+    def wait(self, msecs: int = 30000) -> bool:
+        """等待队列排空（排队任务跳过 + 在途任务返回）；True = 全部完成。"""
+        return self._pool.waitForDone(msecs)

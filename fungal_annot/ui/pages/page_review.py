@@ -222,11 +222,17 @@ class PageReview(QWidget):
         self.b_ref_feat = QPushButton("View reference features")
         self.b_ref_feat.setToolTip("Show the reference record's own five-column feature table")
         self.b_ref_feat.clicked.connect(self._show_reference_features)
+        self.b_recheck = QPushButton("Re-check all")
+        self.b_recheck.setToolTip("Re-validate every annotated sequence with the current "
+                                  "settings (e.g. after changing the identity threshold)")
+        self.b_recheck.clicked.connect(self._recheck_all)
+        self.b_recheck.setEnabled(False)
         toolbar.addWidget(self.b_add_feat)
         toolbar.addWidget(self.b_del_feat)
         toolbar.addWidget(sep)
         toolbar.addWidget(b_align)
         toolbar.addWidget(self.b_ref_feat)
+        toolbar.addWidget(self.b_recheck)
         b_help = QPushButton("Help")
         b_help.setToolTip("How to use this page: steps, terms, tips")
         b_help.clicked.connect(lambda: show_page_help("page_review", self))
@@ -288,6 +294,10 @@ class PageReview(QWidget):
             f'<span style="color:#1a7f37">✓ {g} ready</span> &nbsp; '
             f'<span style="color:#9a6700">⚠ {y} warnings</span> &nbsp; '
             f'<span style="color:#cf222e">✗ {e} need review</span>')
+        # Re-check all 依赖比对上下文（项目加载态无法重验）
+        self.b_recheck.setEnabled(any(
+            getattr(res, "detail", None) is not None
+            for variants in self.win.results.values() for res in variants.values()))
 
     # ---- 数据加载 ----
     def refresh(self):
@@ -458,6 +468,7 @@ class PageReview(QWidget):
         self.viewed_ref = acc
         self.win.chosen_ref[sid] = acc
         self.win.log(f"[{sid}] Adopted annotation from {acc}")
+        self.win._reconcile_gene_types()     # 采纳者变化 → 序列基因型标签随之校正
         self.load_result(sid)            # 重建结果列表 / 清单标记 / 计数条
         self.win._refresh_nav()
         self.win.page_export.refresh()
@@ -467,6 +478,12 @@ class PageReview(QWidget):
         res = self._viewed_result(self.current) if self.current else None
         if res is None:
             return
+        # 立即落盘：防抖只延迟重验。否则 600ms 窗口内切页/切序列会触发
+        # refresh→build_from_features 用旧 features 重建表格，编辑静默丢失
+        try:
+            res.features = self.feature_table.to_features()
+        except ValueError:
+            pass    # 半成品行：保留上次有效 features，防抖重验会照常提示
         self._reval_timer.start(600)
 
     def _auto_revalidate(self):

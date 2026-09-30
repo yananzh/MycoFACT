@@ -1,22 +1,25 @@
 """五列 feature table 与配对 .fsa 输出（§6.7）。
 
-格式要点：互补链 feature 的区段按坐标降序书写；'<'/'> ' 标在对应的
-partial 坐标端；join 多段只在**首行**写 feature key，后续区段行仅含
-起止坐标（NCBI feature_table 规范，重复 key 会被当成多个独立 feature），
-qualifier 跟在最后一段后。
+格式要点：互补链 feature 的区段按坐标降序书写；'<'（5' partial）恒在
+第 1 列、'>'（3' partial）恒在第 2 列，与链方向无关（NCBI feature_table
+规范，解析器只按列识别标记，标反则整条 feature 被判无效坐标丢弃）；
+join 多段只在**首行**写 feature key，后续区段行仅含起止坐标，qualifier
+跟在最后一段后。
 """
 import csv
 import io
 
 
 def _fmt_part(p, strand: int):
-    """返回 (左坐标, 右坐标) 字符串。partial 标记绑定坐标端：
-    plus 左=低('<')/右=高('>')；minus 左=高('>')/右=低('<')。"""
+    """返回 (左坐标, 右坐标) 字符串。NCBI 规范：'<' 恒在第 1 列（5' partial）、
+    '>' 恒在第 2 列（3' partial），与链方向无关。partial_low/high 绑定低/高
+    坐标端，故负链（5' 端 = 高坐标端）在降序书写时 5' partial 标在
+    第 1 列的高坐标、3' partial 标在第 2 列的低坐标。"""
     if strand > 0:
         return (f"<{p.start}" if p.partial_low else str(p.start),
                 f">{p.end}" if p.partial_high else str(p.end))
-    return (f">{p.end}" if p.partial_high else str(p.end),
-            f"<{p.start}" if p.partial_low else str(p.start))
+    return (f"<{p.end}" if p.partial_high else str(p.end),
+            f">{p.start}" if p.partial_low else str(p.start))
 
 
 def _order(features):

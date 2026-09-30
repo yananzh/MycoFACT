@@ -19,6 +19,16 @@ def window(qtbot):
     yield win
 
 
+@pytest.fixture(autouse=True)
+def _no_quit_confirm(monkeypatch):
+    """pytest-qt teardown 会自动 close 本文件创建的窗口：部分测试故意残留
+    pending>0（如禁用态检查），closeEvent 的退出确认弹窗在离屏模式下无人
+    应答会永久阻塞——统一替换为自动确认。"""
+    from fungal_annot.ui.main_window import MainWindow
+    monkeypatch.setattr(MainWindow, "_confirm_quit_with_tasks",
+                        lambda self: True, raising=True)
+
+
 def test_window_has_four_pages(window):
     assert window.stack.count() == 4
     assert not hasattr(window, "page_blast")
@@ -622,6 +632,7 @@ def test_start_annotation_button_flow(qtbot, window, ref_record_seq, ref_gb_text
                         lambda accession, **kw: (ref_gb_text, "full"))
     window.page_reference.refresh()          # 自动勾选前 N → selected_refs 就绪
     window.page_reference.seq_list.setCurrentRow(0)
+    window.go_page(1)                        # 真实流程：用户在参考选择页发起注释
 
     window.page_reference._start_annotate()  # 真实按钮处理器（含队列提交）
     assert window._annotate_pending == 1
@@ -629,6 +640,20 @@ def test_start_annotation_button_flow(qtbot, window, ref_record_seq, ref_gb_text
     qtbot.waitUntil(lambda: window._annotate_pending <= 0, timeout=60000)
     assert window.results["u1"]["REF00001.1"].status in ("green", "yellow")
     assert window.stack.currentIndex() == 2  # 完成后自动进入审核页（4 步向导）
+
+
+def test_annotation_finish_does_not_yank_user_off_page(window):
+    """队列排空的自动跳页只在用户仍停留在发起页时发生；已切到别页工作时
+    只落一条状态栏消息，不强行拽走（与上一测试的跳转路径互补）。"""
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import SeqResult
+
+    window.add_sequence(SeqInput(seq_id="n1", seq="ACGT" * 60, gene_type="tef1"))
+    window.results["n1"] = {"REF00001.1": SeqResult(seq_id="n1", status="green")}
+    window.go_page(3)                        # 用户已在导出页浏览
+    window.page_reference.on_queue_finished()
+    assert window.stack.currentIndex() == 3          # 停在原页，不跳回
+    assert "step 3" in window.statusBar().currentMessage()
 
 
 def test_alignment_view_text(window, ref_record_seq, ref_gb_text):

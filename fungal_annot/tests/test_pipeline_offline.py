@@ -201,8 +201,8 @@ def test_end_to_end_reverse(ref_record_seq, ref_gb_text):
     # 裁剪区段 → info（常态，不染黄），状态为 green
     assert res.status == "green", [f"{i.level}: {i.message}" for i in res.issues]
     assert res.provenance.orientation == "reverse"
-    # 互补链：区段降序 + partial 标记在高坐标端
-    assert ">1300\t1001\tCDS" in res.tbl_text
+    # 互补链：区段降序；'<'（5' partial）恒在第 1 列 → 高坐标端（负链 5' 端）
+    assert "<1300\t1001\tCDS" in res.tbl_text
     assert "900\t452" in res.tbl_text and "900\t452\tCDS" not in res.tbl_text
     assert "\t\t\tcodon_start\t3" in res.tbl_text
 

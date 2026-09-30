@@ -70,8 +70,10 @@ def run_blast(seq: str, blast_db: str = "core_nt", organism: str = "",
             if organism.strip():
                 kwargs["entrez_query"] = organism.strip()
             handle = NCBIWWW.qblast("blastn", blast_db, seq, **kwargs)
-            xml = handle.read()
-            handle.close()
+            try:
+                xml = handle.read()
+            finally:
+                handle.close()   # 读取失败也不能泄漏连接句柄
             return parse_qblast_xml(xml, query_len=len(seq))
         except Exception as ex:  # 网络/限流类异常统一退避重试
             if "Database string" in str(ex):
@@ -110,8 +112,10 @@ def parse_qblast_xml(xml: str, query_len: int) -> list[BlastHit]:
                 qcovs=round(qcovs, 2),
                 evalue=best_hsp.expect if best_hsp else 0.0,
                 subject_len=aln.length,
-                subject_start=min(h.sbjct_start for h in aln.hsps),
-                subject_end=max(h.sbjct_end for h in aln.hsps),
+            # legacy BLAST XML 的负链 HSP 以 sbjct_start > sbjct_end 报告，
+            # 先按 HSP 归一化为 lo..hi 再取包络，避免倒置的 subject 区间
+            subject_start=min(min(h.sbjct_start, h.sbjct_end) for h in aln.hsps),
+            subject_end=max(max(h.sbjct_start, h.sbjct_end) for h in aln.hsps),
                 flags=flags,
             ))
     return hits

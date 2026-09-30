@@ -27,11 +27,31 @@ def _set_app_icon(app) -> None:
         app.setWindowIcon(icon)
 
 
+def _restore_console_streams() -> bool:
+    """console=False 打包后 sys.stdout/stderr 为 None：从终端启动 CLI 子命令时
+    附着父控制台并重建标准流，使命令行输出可见。双击启动（无父控制台）返回
+    False，CLI 输出无处可去，调用方应回退 GUI。"""
+    if sys.stdout is not None and sys.stderr is not None:
+        return True
+    if os.name != "nt":
+        return False
+    import ctypes
+    if not ctypes.windll.kernel32.AttachConsole(ctypes.c_ulong(-1).value):
+        return False
+    # CONIN$/CONOUT$ 由 CPython 特判为 WindowsConsoleIO，Unicode 输出正确
+    sys.stdout = open("CONOUT$", "w", buffering=1)
+    sys.stderr = open("CONOUT$", "w", buffering=1)
+    return True
+
+
 def main() -> int:
     argv = sys.argv[1:]
     if argv and argv[0] in ("run", "presets", "-h", "--help"):
-        from fungal_annot.cli import main as cli_main
-        return cli_main(argv)
+        if getattr(sys, "frozen", False) and not _restore_console_streams():
+            argv = []          # 无父控制台可附着：CLI 输出不可见，回退图形界面
+        else:
+            from fungal_annot.cli import main as cli_main
+            return cli_main(argv)
     from PyQt6.QtWidgets import QApplication
 
     from fungal_annot.ui.main_window import MainWindow
@@ -49,7 +69,8 @@ def main() -> int:
     def _gui_excepthook(etype, value, tb):
         import traceback
         text = "".join(traceback.format_exception(etype, value, tb))
-        sys.stderr.write(text)
+        if sys.stderr is not None:   # console=False 打包下 stderr 为 None
+            sys.stderr.write(text)
         try:
             win.log("Unhandled error: " + text.strip().splitlines()[-1])
         except Exception:

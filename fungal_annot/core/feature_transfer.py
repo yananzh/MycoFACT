@@ -137,7 +137,10 @@ def transfer_features(ref_features, mapping, query_len: int,
                 clipped += 1                  # 部分覆盖（查询只覆盖基因一端）同样是 partial 语义
             qs, shrink_l = mapping.map_point(s, "right")
             qe, shrink_r = mapping.map_point(e, "left")
-            if qs is None or qe is None or qs >= qe:
+            # 1 bp 段精确命中时 qs == qe 是合法区间；只有塌缩（多 bp 段或
+            # 带收缩的映射挤成一点）才视为查询缺失
+            one_bp_exact = (s == e and not shrink_l and not shrink_r)
+            if qs is None or qe is None or qs > qe or (qs == qe and not one_bp_exact):
                 # 区间内却映射失败或塌缩（查询缺失该段），禁止静默（§6.5）
                 issues.append(Issue(
                     "error", "exon_map_fail",
@@ -198,10 +201,15 @@ def transfer_features(ref_features, mapping, query_len: int,
                       else feat.parts[0].partial_low) or ref_cs > 1
             ref_p3 = (feat.parts[0].partial_low if feat.strand < 0
                       else feat.parts[-1].partial_high)
-            complete_start = (m_total == 0 and not ref_p5 and not dropped_before
+            # 被整体丢弃的段按链方向换算到 5'/3' 端：dropped_before/after 绑定
+            # 坐标侧，而 5' 端 = 负链的高坐标侧（m_total/ref_p5 已自带方向感知，
+            # 此处是同一语义的显式护栏）
+            drop_5 = dropped_after if feat.strand < 0 else dropped_before
+            drop_3 = dropped_before if feat.strand < 0 else dropped_after
+            complete_start = (m_total == 0 and not ref_p5 and not drop_5
                               and frame[:3] == "ATG")
             complete_stop = (len(frame) % 3 == 0 and frame[-3:] in _STOPS
-                             and not ref_p3 and not dropped_after)
+                             and not ref_p3 and not drop_3)
 
         # ---- 触及序列端点的自动 partial（§2.1，可全局关闭；完整密码子豁免）----
         touches_low = first.start == 1

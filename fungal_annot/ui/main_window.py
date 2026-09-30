@@ -11,7 +11,7 @@ Settings / Guide / About 三个直接动作（点击即执行，无下拉子菜�
 import os
 
 from PyQt6.QtCore import QSettings, QSize, Qt
-from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
+from PyQt6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QFormLayout,
                              QLabel, QLineEdit, QListWidgetItem, QMainWindow,
                              QMessageBox, QStackedWidget, QVBoxLayout, QWidget)
 from PyQt6.QtGui import QColor, QGuiApplication
@@ -176,7 +176,35 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geom)
         self._refresh_nav()          # 首屏即显示步骤标记
 
+    def _confirm_quit_with_tasks(self) -> bool:
+        """退出前确认（有任务在跑时）；独立方法便于测试替身。"""
+        ret = QMessageBox.question(
+            self, "Quit with tasks running",
+            "BLAST/annotation tasks are still running.\n\n"
+            "Quitting cancels the queued tasks; the in-flight NCBI call cannot "
+            "be interrupted and may delay exit for up to a few minutes.\n\n"
+            "Quit anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        return ret == QMessageBox.StandardButton.Yes
+
     def closeEvent(self, event):
+        if self._blast_pending > 0 or self._annotate_pending > 0:
+            if not self._confirm_quit_with_tasks():
+                event.ignore()
+                return
+            self._abandon_queues()
+            # 在途 NCBI 调用返回前保持事件循环存活：QThreadPool 析构会阻塞等待
+            # 工作线程，若直接退出，进程会在窗口消失后僵死数分钟（不可见）
+            busy = QMessageBox(QMessageBox.Icon.Information, "Exiting",
+                               "Waiting for the in-flight NCBI call to return...",
+                               QMessageBox.StandardButton.NoButton, self)
+            busy.show()
+            try:
+                while not (self.blast_queue.wait(200) and self.annotate_queue.wait(200)):
+                    QApplication.processEvents()
+            finally:
+                busy.accept()
         settings = QSettings("fungal_annot", "fungal_annot")
         settings.setValue("geometry2", self.saveGeometry())
         super().closeEvent(event)
@@ -484,7 +512,11 @@ class MainWindow(QMainWindow):
         if self._blast_pending <= 0:
             self.page_import.on_queue_finished()
             if self.sequences:               # 项目已丢弃则不再强制跳转
-                self.go_page(1)              # BLAST 排空 → 自动进入参考选择
+                if self.stack.currentIndex() == 0:
+                    self.go_page(1)          # 用户仍停在导入页 → 自动进入参考选择
+                else:
+                    self.log("BLAST queue finished - continue on step 2 "
+                             "(reference selection)")
 
     def _on_annotate_finished(self, gen: int, seq_id: str, ref_key: str, result: object):
         if gen != self.annotate_queue.gen:
@@ -515,6 +547,20 @@ class MainWindow(QMainWindow):
             elif self.chosen_ref.get(sid) not in variants:
                 self.chosen_ref[sid] = next(iter(variants))
 
+    def _reconcile_gene_types(self):
+        """从采纳的 variant 校正序列的基因型标签（GUI 线程落账）。
+
+        自动判定发生在工作线程，且多参考对比会把同一 SeqInput 并发提交多个
+        worker——工作线程不得回写共享 SeqInput（pipeline.annotate_sequence 把
+        判定结果记在 SeqResult.gene_type 上）；这里以采纳结果为准统一落账，
+        状态栏摘要与导出预览随之更新。显式指定的标签（res.gene_type 即其名）
+        与判定 Generic 后重识别成功的场景都被覆盖。"""
+        for s in self.sequences:
+            res = self.chosen_result(s.seq_id)
+            gt = getattr(res, "gene_type", "") if res is not None else ""
+            if gt:
+                s.gene_type = gt
+
     def _after_annotate_task(self):
         self.update_summary()
         self._annotate_pending -= 1
@@ -522,6 +568,7 @@ class MainWindow(QMainWindow):
             self.page_reference.progress.maximum() - max(self._annotate_pending, 0))
         if self._annotate_pending <= 0:
             self._reconcile_chosen()
+            self._reconcile_gene_types()
             self.page_reference.on_queue_finished()
 
     def _on_worker_progress(self, seq_id: str, stage: str, frac: float):

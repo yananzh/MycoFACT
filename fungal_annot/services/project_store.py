@@ -29,8 +29,13 @@ def load_settings() -> dict:
 
 def save_settings(settings: dict) -> None:
     os.makedirs(os.path.dirname(_settings_path()), exist_ok=True)
-    with open(_settings_path(), "w", encoding="utf-8", newline="\n") as fh:
+    # 原子替换（与 save_project 同一标准）：中途崩溃/磁盘满不留半写文件，
+    # 否则 load_settings 会把截断的 JSON 静默重置为 {}，丢失全部用户设置
+    path = _settings_path()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(settings, fh, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
 
 
 def _feature_to_dict(f) -> dict:
@@ -57,6 +62,7 @@ def _result_to_dict(r) -> dict:
     return {
         "seq_id": r.seq_id,
         "status": r.status,
+        "gene_type": getattr(r, "gene_type", ""),
         "issues": [{"level": i.level, "code": i.code, "message": i.message}
                    for i in r.issues],
         "provenance": vars(r.provenance),
@@ -70,6 +76,7 @@ def _result_from_dict(r):
     from ..core.models import Issue, Provenance
     res = SeqResultLite(seq_id=r["seq_id"], status=r["status"],
                         tbl_text=r["tbl_text"], fsa_text=r["fsa_text"])
+    res.gene_type = r.get("gene_type", "")
     res.features = [_feature_from_dict(d) for d in r.get("features", [])]
     res.issues = [Issue(i["level"], i["code"], i["message"]) for i in r["issues"]]
     prov = Provenance()
@@ -187,6 +194,7 @@ class SeqResultLite:
     status: str = "red"
     tbl_text: str = ""
     fsa_text: str = ""
+    gene_type: str = ""
     issues: list = field(default_factory=list)
     provenance: object = None
     features: list = field(default_factory=list)

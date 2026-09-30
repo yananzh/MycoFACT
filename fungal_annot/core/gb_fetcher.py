@@ -3,6 +3,7 @@
 长记录（基因组/超长 contig）按 BLAST HSP 窗口 ±flank 截取，避免整条下载与
 O(n·m) 全序列比对；efetch 的 seq_start/seq_stop 返回的子记录坐标帧已重建。
 """
+import http.client
 import os
 import re
 import time
@@ -80,16 +81,21 @@ def fetch_gb_text(accession: str, email: str = "", api_key: str = "",
         params["seq_stop"] = e
     text = None
     for attempt in range(3):
+        handle = None
         try:
             throttle.wait()
             handle = Entrez.efetch(**params)
             text = handle.read()
-            handle.close()
             break
-        except (URLError, OSError) as ex:
+        except (URLError, OSError, http.client.HTTPException) as ex:
+            # HTTPException 覆盖截断响应的 IncompleteRead 等读取期协议错误，
+            # 否则绕过重试并以原始 traceback 打崩调用方
             if attempt == 2:
                 raise GbFetchError(f"Failed to download {accession} after 3 attempts: {ex}") from ex
             time.sleep(5 * (2 ** attempt))
+        finally:
+            if handle is not None:
+                handle.close()
     if not text or "LOCUS" not in text[:200]:
         raise GbFetchError(f"{accession}: response is not GenBank text")
     with open(cache_file, "w", encoding="utf-8") as fh:

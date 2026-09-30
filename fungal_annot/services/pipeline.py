@@ -57,6 +57,7 @@ class SeqResult:
     provenance: Provenance = field(default_factory=Provenance)
     tbl_text: str = ""
     fsa_text: str = ""
+    gene_type: str = ""      # 本结果实际使用的基因类型（显式指定或自动判定）
     detail: AnnotateDetail | None = None
 
     def report_row(self) -> dict:
@@ -148,6 +149,10 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
             res.provenance.qcovs = hit.qcovs
 
         # ---- 1b. 基因类型自动判定（§6.1：从命中标题/参考注释推断）----
+        # 注意：不得回写 seq_input.gene_type——UI 的多参考对比会把同一 SeqInput
+        # 并发提交多个 worker（main_window.start_annotation），共享标签会被
+        # 竞争改写并影响兄弟任务的判定；判定结果记在本结果的 gene_type 上，
+        # 由 UI 线程统一落账（main_window._reconcile_gene_types）。
         if preset is None:
             titles = [h.title for h in (hits or [])[:5]]
             if rec is not None:
@@ -156,7 +161,6 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
                         titles.extend(f.qualifiers.get(qk, []))
             detected = detect_from_titles(titles)
             if detected is not None:
-                seq_input.gene_type = detected.name
                 preset = detected
                 src_desc = "BLAST hit titles" if hits else "reference annotation"
                 res.issues.append(Issue(
@@ -165,7 +169,6 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
                     "if wrong, add the correct gene to presets.json"))
             else:
                 preset = get_preset("Generic")
-                seq_input.gene_type = "Generic"
                 res.issues.append(Issue(
                     "warning", "gene_type_generic",
                     "Gene not recognized from hit titles/annotation - using the Generic "
@@ -173,7 +176,8 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
                     "record only). Verify manually, or add the gene to presets.json "
                     "to enable tailored transfer."))
             if progress:
-                progress(f"gene type: {seq_input.gene_type}", 0.2)
+                progress(f"gene type: {preset.name}", 0.2)
+        res.gene_type = preset.name
 
         # ---- 2. 比对与映射 ----
         if progress:
@@ -278,7 +282,9 @@ def write_outputs(results: list[SeqResult], out_dir: str,
             s = inputs.get(r.seq_id)
             if s:
                 row["length"] = len(s.seq)
-                row["gene_type"] = s.gene_type
+                # 结果自身记录的基因类型优先（多参考对比时各 variant 可不同，
+                # 且工作线程不得回写共享 SeqInput）；项目加载态回退序列标签
+                row["gene_type"] = r.gene_type or s.gene_type
             rows.append(row)
         stem = _safe_stem(stems[i]) if stems and i < len(stems) else _safe_stem(r.seq_id)
         tbl = _unique_path(out_dir, stem, ".tbl", used)
