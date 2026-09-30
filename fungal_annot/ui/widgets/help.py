@@ -260,8 +260,8 @@ per sequence for export. Every edit is re-validated automatically.</p>
 {_table(("Status", "Meaning"),
         ((_status_chip("green"), "No problems - nothing to do."),
          (_status_chip("yellow"), "Exportable, but read the issues first."),
-         (_status_chip("red"), "Fix it or confirm knowingly - export blocked "
-                               "until then.")),
+         (_status_chip("red"), "Fix it or confirm knowingly at export - "
+                               "the export page asks first.")),
         widths=(175,))}
 
 <h3>How to use</h3>
@@ -273,8 +273,8 @@ for export.</li>
 Re-validation runs ~0.6 s after you stop typing.</li>
 <li><b>Add feature</b> / <b>Delete row</b> manage rows (the source row is
 protected); <b>View alignment</b> checks exon boundaries against the reference.</li>
-<li><b>Confirm for export</b> - required for red, optional for yellow, disabled
-for green.</li>
+<li>Red sequences cannot be exported right away - the <b>export page asks you
+to confirm them knowingly</b> when you press Export.</li>
 </ol>
 
 <h3>Terms</h3>
@@ -308,8 +308,9 @@ for green.</li>
     ("Cells are read-only", "Loaded from a .fap.json without alignment context - "
                             "re-annotate on step 2."),
     ("Still red after an edit", "Wait ~0.6 s; hover Issues for the exact problem."),
-    ("Export blocked on step 4", "A red sequence is unconfirmed - press Confirm "
-                                 "for export here."),
+    ("Export asks to confirm red ones", "Review the issues on step 3 first - "
+                                        "accept the dialog only if you do so "
+                                        "knowingly."),
 ))}
 """),
     "page_export": ("How to use: Export Results", f"""
@@ -324,7 +325,8 @@ concatenating every record.</p>
 <code>&lt;SeqID&gt;.tbl</code> per annotated sequence plus the combined
 <code>all_features.tbl</code> (overwrites existing files).</li>
 <li><b>Open output folder</b> shows the results in Explorer.</li>
-<li>Unconfirmed red sequences block the export - confirm them on step 3.</li>
+<li>Red sequences ask for confirmation at export - review their issues on
+step 3 first, then accept the dialog only knowingly.</li>
 </ol>
 
 <h3>What's next (BankIt)</h3>

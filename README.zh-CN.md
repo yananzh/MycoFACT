@@ -53,6 +53,11 @@ pip install -r requirements.txt
 打 tag（如 `v0.1.0`）会自动附到 GitHub Releases。当前未签名：Windows
 首次运行 SmartScreen 会告警（点"仍要运行"），macOS 首启需右键 → 打开。
 
+应用图标（蘑菇 + DNA 螺旋，见 [assets/logos](assets/logos)）三平台统一：
+Windows EXE 内嵌多尺寸 `.ico`，macOS .app 使用 `.icns`，各平台窗口/任务栏
+图标用多尺寸 PNG。修改 logo 后用 `python scripts/build_icons.py` 重新生成
+（依赖 PyQt6 + Pillow）。
+
 ## 🖥 图形界面
 
 ```bash

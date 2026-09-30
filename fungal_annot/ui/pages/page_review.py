@@ -2,7 +2,7 @@
 （该序列每个参考一行：Reference / Status / Identity / Issues / Use，点行查看该
 variant，Use 列单选采纳，Issues 列悬停可见完整问题与建议）；feature 表格支持增删行、
 编辑后 600ms 防抖自动重验（无比对上下文的项目加载态禁编辑并给行内提示）；
-红灯序列需 Confirm 后才能导出。"""
+红灯序列在导出页导出时确认后才能导出（确认弹窗见 page_export）。"""
 import html
 
 from PyQt6.QtCore import Qt, QTimer
@@ -227,13 +227,6 @@ class PageReview(QWidget):
         toolbar.addWidget(sep)
         toolbar.addWidget(b_align)
         toolbar.addWidget(self.b_ref_feat)
-        self.b_confirm = QPushButton("Confirm for export")
-        self.b_confirm.setToolTip("Record that you reviewed this sequence knowingly "
-                                  "(optional note kept in the log). Required for red "
-                                  "sequences before export.")
-        self.b_confirm.clicked.connect(self._manual_confirm)
-        self.b_confirm.setEnabled(False)
-        toolbar.addWidget(self.b_confirm)
         b_help = QPushButton("Help")
         b_help.setToolTip("How to use this page: steps, terms, tips")
         b_help.clicked.connect(lambda: show_page_help("page_review", self))
@@ -350,8 +343,6 @@ class PageReview(QWidget):
             self.b_del_feat.setEnabled(False)
             self.lbl_project_hint.setVisible(False)
             self.lbl_issues.setVisible(False)
-            self.b_confirm.setEnabled(False)
-            self.b_confirm.setText("Confirm for export")
             return
         if self.viewed_ref not in variants:
             self.viewed_ref = self.win.chosen_accession(seq_id)
@@ -365,7 +356,6 @@ class PageReview(QWidget):
         self.b_del_feat.setEnabled(editable)
         self.lbl_project_hint.setVisible(not editable)
         self.feature_table.build_from_features(res.features)
-        self._update_confirm_button(seq_id)
 
     # ---- Annotation results ----
     def _populate_variant_table(self, seq_id: str):
@@ -472,25 +462,6 @@ class PageReview(QWidget):
         self.win._refresh_nav()
         self.win.page_export.refresh()
 
-    def _update_confirm_button(self, seq_id: str):
-        """Confirm 按钮随所看 variant 的状态变化（红灯必选、黄灯可选、绿灯禁用）。"""
-        res = self._viewed_result(seq_id)
-        if res is None:
-            return
-        if res.status == "red":
-            confirmed = self.win.confirmed.get(seq_id)
-            self.b_confirm.setEnabled(not confirmed)
-            self.b_confirm.setText("Confirmed ✓" if confirmed
-                                   else "Confirm for export (required)")
-        elif res.status == "yellow":
-            confirmed = self.win.confirmed.get(seq_id)
-            self.b_confirm.setEnabled(not confirmed)
-            self.b_confirm.setText("Confirmed ✓" if confirmed
-                                   else "Confirm for export (optional)")
-        else:
-            self.b_confirm.setEnabled(False)
-            self.b_confirm.setText("Confirm for export")
-
     # ---- 编辑重验 ----
     def _on_edited(self):
         res = self._viewed_result(self.current) if self.current else None
@@ -519,7 +490,6 @@ class PageReview(QWidget):
         res.issues = list(res.detail.base_issues) + issues
         res.status = status_of(res.issues)
         res.tbl_text = write_tbl(features, sid)
-        self._update_confirm_button(sid)
         self._populate_variant_table(sid)
         self._update_issues_hint(sid)
         self._refresh_seq_row(sid)
@@ -567,33 +537,6 @@ class PageReview(QWidget):
             QMessageBox.information(self, "Not allowed", err)
             return
         self._on_edited()
-
-    # ---- 人工确认（红灯必须，黄灯可选；确认针对当前序列，作用于其采纳的 variant）----
-    def _manual_confirm(self):
-        sid = self.current
-        if not sid:
-            return
-        res = self._viewed_result(sid)
-        if res is None:
-            return
-        if res.status == "green":
-            QMessageBox.information(self, "No confirmation needed",
-                                    "This sequence is Ready; no confirmation needed.")
-            return
-        note, ok = self._ask_note(sid)
-        if not ok:
-            return
-        self.win.confirmed[sid] = True
-        self.win.log(f"[{sid}] Manually confirmed" + (f": {note}" if note else ""))
-        self.load_result(sid)
-        self.refresh()
-
-    def _ask_note(self, sid: str):
-        from PyQt6.QtWidgets import QInputDialog
-        text, ok = QInputDialog.getText(
-            self, "Manual confirmation",
-            f"Confirm [{sid}] is ready for submission (optional note, recorded in log):")
-        return (text.strip(), ok)
 
     def _reference_features_text(self):
         """参考记录自身的五列 feature table（不含 source，只读对照用）。"""

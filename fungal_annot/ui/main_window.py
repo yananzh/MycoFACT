@@ -201,9 +201,10 @@ class MainWindow(QMainWindow):
     # ---- 步骤检查条（Phase 2）----
     def _step_states(self) -> list[bool]:
         annotated = any(self.results.values())
+        # 已审核 = 每条已注释序列都有采纳结果；红灯序列的知情确认挪到
+        # 导出页导出弹窗（page_export._export），不再阻断第 4 步入口
         reviewed = annotated and all(
             (res := self.chosen_result(s.seq_id)) is not None
-            and (res.status != "red" or self.confirmed.get(s.seq_id))
             for s in self.sequences if self.results.get(s.seq_id))
         # 4 步：1 Import&BLAST 就绪（序列+hits）→ 2 已注释 → 3 已审核 → 4 已导出
         return [
@@ -228,8 +229,7 @@ class MainWindow(QMainWindow):
             return "step 1 has no BLAST hits yet - run BLAST (or wait for the queue)"
         if step == 1:
             return "step 2 has no annotation results yet - start annotation"
-        return "step 3 is not fully reviewed - adopt a result per sequence " \
-               "and confirm red ones"
+        return "step 3 is not fully reviewed - adopt a result per sequence"
 
     def _refresh_nav(self):
         states = self._step_states()

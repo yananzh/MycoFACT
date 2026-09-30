@@ -64,6 +64,12 @@ Ready-to-run builds: the `Build` workflow packages the app with PyInstaller
 Binaries are currently unsigned: Windows SmartScreen shows a warning on first
 launch ("More info" → "Run anyway"); on macOS, right-click → Open on first start.
 
+The app icon (mushroom + DNA helix, [assets/logos](assets/logos)) ships on all
+three platforms: embedded `.ico` in the Windows executable, `.icns` in the macOS
+bundle, and multi-size PNGs as the window/taskbar icon everywhere. Regenerate
+the icon files from the SVG with `python scripts/build_icons.py`
+(needs PyQt6 + Pillow).
+
 ## 🖥 Graphical Interface
 
 ```bash

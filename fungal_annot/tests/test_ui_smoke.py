@@ -113,10 +113,10 @@ def test_step_nav_states_and_locking(window):
 
     window.results["s1"] = {"REF00001.1": SimpleNamespace(status="red")}
     window._refresh_nav()
-    assert window._step_locked(3)[0]                    # 红灯未确认 → Export 锁
-    assert "reviewed" in window.nav.item(3).toolTip()
+    assert not window._step_locked(3)[0]                # 红灯不再锁 Export（确认挪到导出弹窗）
+    assert "reviewed" not in window.nav.item(3).toolTip()
     window.confirmed["s1"] = True
-    assert not window._step_locked(3)[0]                # 确认后 Export 解锁
+    assert not window._step_locked(3)[0]                # 仍解锁（confirmed 在导出时使用）
     window._refresh_nav()
     assert window.nav.item(3).toolTip() == ""
 
@@ -843,10 +843,8 @@ def test_enter_accessions_applies_values(window, monkeypatch):
     assert window.selected_refs["m1"] == ["AA000001"]
 
 
-def test_review_status_wording_and_confirm(window, ref_record_seq, ref_gb_text, monkeypatch):
-    """状态文案动作化：Confirm 随状态变化（红灯必选→已确认禁用），列表用新标记。"""
-    from PyQt6.QtWidgets import QInputDialog
-
+def test_review_status_wording_and_confirm(window, ref_record_seq, ref_gb_text):
+    """Review 页不再有 Confirm 按钮（红灯确认挪到导出页弹窗），列表用新标记。"""
     from fungal_annot.core.models import SeqInput
     from fungal_annot.services.pipeline import annotate_sequence
 
@@ -859,23 +857,9 @@ def test_review_status_wording_and_confirm(window, ref_record_seq, ref_gb_text, 
     page.refresh()
     page.current = "w1"
     page.load_result("w1")
-    status = window.results["w1"]["REF00001.1"].status
-    if status == "red":
-        assert page.b_confirm.text() == "Confirm for export (required)"
-        assert page.b_confirm.isEnabled()
-    elif status == "yellow":
-        assert page.b_confirm.text() == "Confirm for export (optional)"
-    else:
-        assert not page.b_confirm.isEnabled()
-
-    # 确认（黄/红）→ 按钮变为已确认并禁用；绿灯本就无需确认
-    if status != "green":
-        monkeypatch.setattr(QInputDialog, "getText",
-                            staticmethod(lambda *a, **k: ("known issue", True)))
-        page._manual_confirm()
-        assert window.confirmed["w1"] is True
-        assert page.b_confirm.text().startswith("Confirmed")
-        assert not page.b_confirm.isEnabled()
+    # Confirm 按钮及其确认流程已移除：红灯序列在导出页导出弹窗里确认
+    assert getattr(page, "b_confirm", None) is None
+    assert not hasattr(page, "_manual_confirm")
 
     # 列表标记用新文案
     item_text = page.seq_list.item(0).text()
@@ -916,6 +900,44 @@ def test_export_page_writes_tbl_only(window, tmp_path, ref_record_seq, ref_gb_te
     # 单序列：汇总文件与 per-seq .tbl 内容一致
     assert (out / "all_features.tbl").read_text(encoding="utf-8") == content
     assert shown and "Export done" in shown[0]
+
+
+def test_export_confirms_red_sequences(window, tmp_path, ref_record_seq, ref_gb_text, monkeypatch):
+    """红灯序列导出时弹知情确认（原 Review 页 Confirm 按钮的替代流程）：
+    拒绝 → 不导出且不记 confirmed；同意 → 记 confirmed 并放行导出。"""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import annotate_sequence
+
+    seq, _ = ref_record_seq
+    window.add_sequence(SeqInput(seq_id="r1", seq=seq[300:1600], gene_type="tef1",
+                                 source_qualifiers={"organism": "F. t", "country": "China"}))
+    window.results["r1"] = {"REF00001.1": annotate_sequence(
+        window.sequences[0], window.make_config(), reference_gb_text=ref_gb_text)}
+    window.results["r1"]["REF00001.1"].status = "red"   # 强制红灯走确认分支
+    page = window.page_export
+    page.refresh()
+    out = tmp_path / "red_confirm"
+    page.dir_edit.setText(str(out))
+
+    questions = []
+
+    def fake_question(*a, **k):
+        questions.append(a[2] if len(a) > 2 else "")
+        return QMessageBox.StandardButton.No
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake_question))
+    monkeypatch.setattr(QMessageBox, "information",
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
+    page._export()
+    assert not out.exists() and window.confirmed.get("r1") is None
+    assert questions and "r1" in questions[0]
+
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    page._export()
+    assert window.confirmed["r1"] is True
+    assert (out / "r1.tbl").exists()
 
 
 def test_recheck_preserves_pipeline_issues(window, ref_record_seq, ref_gb_text):

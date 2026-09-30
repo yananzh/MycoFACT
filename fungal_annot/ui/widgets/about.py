@@ -69,27 +69,22 @@ class AboutDialog(QDialog):
         desc.setWordWrap(True)
         v.addWidget(desc)
 
+        link = QLabel(f'<a href="{REPO_URL}">{REPO_URL}</a>')
+        link.setOpenExternalLinks(True)
+        v.addWidget(link)
+
         self.update_status = QLabel("")
         self.update_status.setObjectName("Hint")
         self.update_status.setWordWrap(True)
         v.addWidget(self.update_status)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        v.addWidget(sep)
-
         row = QHBoxLayout()
+        row.addStretch(1)
         self.b_check = QPushButton("Check for Updates")
         self.b_check.setObjectName("PrimaryButton")
         self.b_check.clicked.connect(self.check_updates)
         row.addWidget(self.b_check)
-        b_repo = QPushButton("GitHub")
-        b_repo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(REPO_URL)))
-        row.addWidget(b_repo)
         row.addStretch(1)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        bb.rejected.connect(self.reject)
-        row.addWidget(bb)
         v.addLayout(row)
 
         tip = QLabel(DISCLAIMER)

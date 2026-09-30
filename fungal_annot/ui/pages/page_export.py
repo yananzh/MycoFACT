@@ -1,4 +1,4 @@
-"""P5 导出页（§7.2 + 多参考对比）：汇总表、输出目录、导出（红灯未确认拦截）。
+"""P5 导出页（§7.2 + 多参考对比）：汇总表、输出目录、导出（红灯需确认后放行）。
 
 每序列一个 .tbl，取其采纳（Adopted）的 variant，另加多记录汇总
 all_features.tbl（全部序列的 >Feature 块合并，可整文件提交 BankIt）。
@@ -130,20 +130,27 @@ class PageExport(QWidget):
                                  "steps 1-3 first")
 
     def _export(self):
-        # 红灯拦截只看采纳（导出）的 variant；未采纳 variant 供比选，不拦
-        blocked = []
+        # 红灯序列在导出时知情确认（Review 页原 Confirm 按钮已并入本弹窗）；
+        # 只看采纳（导出）的 variant，未采纳 variant 供比选，不拦
+        red_open = []
         for s in self.win.sequences:
             res = self.win.chosen_result(s.seq_id)
             if res is not None and res.status == "red" \
                     and not self.win.confirmed.get(s.seq_id):
-                blocked.append(s.seq_id)
-        if blocked:
-            QMessageBox.warning(
-                self, "Export blocked",
-                "These RED sequences lack manual confirmation and cannot be exported:\n"
-                + "\n".join(blocked)
-                + "\n\nUse the 'Confirm for export' button on the Review page.")
-            return
+                red_open.append(s.seq_id)
+        if red_open:
+            answer = QMessageBox.question(
+                self, "Confirm export of red sequences",
+                "These RED sequences have unfixed errors:\n"
+                + "\n".join(red_open)
+                + "\n\nExport them anyway? Only do this if you reviewed the "
+                  "issues knowingly.")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            for sid in red_open:
+                self.win.confirmed[sid] = True
+                self.win.log(f"[{sid}] Manually confirmed at export")
+            self.refresh()
         if not any(self.win.results.values()):
             QMessageBox.information(self, "No results", "Nothing to export yet.")
             return
