@@ -3,4 +3,4 @@
 MycoFACT = Fungal Feature Annotation & Comparison Tool。
 三层架构（开发计划 §4）：core/ 纯 Python 禁止 import Qt；services/ 编排；ui/ 表现层。
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
