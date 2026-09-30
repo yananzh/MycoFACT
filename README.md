@@ -32,6 +32,14 @@ whitelist, codon table taken from the reference record).
 
 ## How it works
 
+> [!IMPORTANT]
+> **Check Sanger trace quality before annotating.** Open each chromatogram (.ab1) in
+> a trace viewer such as [SnapGene](https://www.snapgene.com/), Chromas or 4Peaks,
+> inspect the peak quality, and trim the low-quality ends — the noisy stretch right
+> after the primer and the deteriorating tail. Import only the clean, high-confidence
+> region as FASTA: the annotation is transferred onto exactly the bases you supply,
+> so inaccurate input produces inaccurate feature tables.
+
 1. **Import & BLAST** — paste, drag & drop, or browse your FASTA; hits come back ranked.
 2. **Reference selection** — pick the reference record in the hit table (a recommended
    row is pre-selected).

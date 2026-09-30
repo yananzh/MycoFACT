@@ -154,6 +154,11 @@ PAGE_HELP = {
 <h3>What this page does</h3>
 <p>Import your marker sequences and find close references for each with an
 <b>online BLAST</b> search at NCBI.</p>
+{_note("<b>Check Sanger trace quality before annotating</b> - open each chromatogram "
+       "(.ab1) in a trace viewer such as <b>SnapGene</b> or Chromas, inspect the "
+       "peaks, and trim the low-quality front and back ends. Import only the clean, "
+       "high-confidence stretch: the annotation is transferred onto exactly the "
+       "bases you supply.", "warn")}
 
 <h3>How to use</h3>
 <ol>
@@ -482,6 +487,12 @@ APP_GUIDE = ("User Guide", f"""
 <p>For each fungal marker amplicon, find a close reference on NCBI, transfer its
 annotation, review and fix it, and export the <b>five-column .tbl</b> that NCBI
 BankIt expects - one file per sequence.</p>
+
+<h3>Before you start: check the Sanger traces</h3>
+{_note("Open each chromatogram (.ab1) in a trace viewer such as <b>SnapGene</b>, "
+       "inspect the peak quality, and trim the low-quality front and back ends "
+       "before exporting the FASTA. The tool annotates exactly the bases you give "
+       "it - accurate input in, submittable output out.", "warn")}
 
 <h3>The four-step workflow</h3>
 {_APP_STEPS}
