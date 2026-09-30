@@ -32,7 +32,9 @@ def _logo_pixmap(size: int):
 
 # ---- About 弹窗 -------------------------------------------------------------
 class AboutDialog(QDialog):
-    """图标 + 名称/版本 + 一句简介 + 仓库链接 + 居中更新按钮 + 底部免责声明。"""
+    """图标 + 名称/版本 + 一句简介 + 仓库链接 + 居中更新按钮 + 底部免责声明。
+
+    全部内容水平居中（logo 置顶、文字逐行居中），呈现"关于"弹窗的居中式版式。"""
 
     def __init__(self, version: str, parent=None):
         super().__init__(parent)
@@ -45,37 +47,44 @@ class AboutDialog(QDialog):
         v.setContentsMargins(20, 20, 20, 14)
         v.setSpacing(10)
 
-        head = QHBoxLayout()
+        _CENTER = Qt.AlignmentFlag.AlignHCenter
+
         logo = QLabel()
         logo.setPixmap(_logo_pixmap(44))
-        head.addWidget(logo, 0, Qt.AlignmentFlag.AlignTop)
-        names = QVBoxLayout()
+        logo.setAlignment(_CENTER)
+        v.addWidget(logo)
+
         title = QLabel("MycoFACT")
         title.setObjectName("AboutTitle")
-        names.addWidget(title)
+        title.setAlignment(_CENTER)
+        v.addWidget(title)
+
         sub = QLabel("Fungal Feature Annotation & Comparison Tool")
         sub.setObjectName("Hint")
-        names.addWidget(sub)
-        head.addLayout(names, 1)
-        v.addLayout(head)
+        sub.setAlignment(_CENTER)
+        v.addWidget(sub)
 
         ver = QLabel(f"Version {version}")
         ver.setObjectName("AboutVersion")
+        ver.setAlignment(_CENTER)
         v.addWidget(ver)
 
         desc = QLabel("BLAST a close reference, transfer its annotation, "
                       "review, and export BankIt-ready five-column .tbl "
                       "feature tables.")
         desc.setWordWrap(True)
+        desc.setAlignment(_CENTER)
         v.addWidget(desc)
 
         link = QLabel(f'<a href="{REPO_URL}">{REPO_URL}</a>')
         link.setOpenExternalLinks(True)
+        link.setAlignment(_CENTER)
         v.addWidget(link)
 
         self.update_status = QLabel("")
         self.update_status.setObjectName("Hint")
         self.update_status.setWordWrap(True)
+        self.update_status.setAlignment(_CENTER)
         v.addWidget(self.update_status)
 
         row = QHBoxLayout()
@@ -90,6 +99,7 @@ class AboutDialog(QDialog):
         tip = QLabel(DISCLAIMER)
         tip.setObjectName("Hint")
         tip.setWordWrap(True)
+        tip.setAlignment(_CENTER)
         v.addWidget(tip)
 
     # ---- 更新检查 ----
