@@ -1,7 +1,9 @@
 """五列 feature table 与配对 .fsa 输出（§6.7）。
 
 格式要点：互补链 feature 的区段按坐标降序书写；'<'/'> ' 标在对应的
-partial 坐标端；join 多段为同 feature key 的连续行，qualifier 跟在最后一段后。
+partial 坐标端；join 多段只在**首行**写 feature key，后续区段行仅含
+起止坐标（NCBI feature_table 规范，重复 key 会被当成多个独立 feature），
+qualifier 跟在最后一段后。
 """
 import csv
 import io
@@ -29,8 +31,10 @@ def feature_lines(feat) -> list[str]:
     coords = [_fmt_part(p, feat.strand) for p in feat.parts]
     if feat.strand < 0:
         coords = list(reversed(coords))
-    for left, right in coords:
-        lines.append(f"{left}\t{right}\t{feat.ftype}")
+    for i, (left, right) in enumerate(coords):
+        # feature key 只在首行；join 的后续区段行仅两列坐标（NCBI 规范）
+        lines.append(f"{left}\t{right}\t{feat.ftype}" if i == 0
+                     else f"{left}\t{right}")
     for k, vals in feat.qualifiers.items():
         for v in vals:
             # 五列格式：列 1-3 留空，qualifier 在列 4、值在列 5（三个前导制表符）

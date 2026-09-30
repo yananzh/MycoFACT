@@ -17,11 +17,14 @@ def test_plus_join_and_partial():
     lines = tbl.splitlines()
     assert lines[0] == ">Feature seq1"
     assert "<1\t300\tCDS" in lines
-    assert "401\t849\tCDS" in lines
+    # NCBI 规范：join 的后续区段行只写坐标，不重复 feature key
+    assert "401\t849" in lines
+    assert "401\t849\tCDS" not in lines
+    assert sum(1 for ln in lines if ln.endswith("\tCDS")) == 1
     assert "\t\t\tgene\ttef1" in lines           # 五列：1-3 列空，qualifier 第 4 列
     assert "\t\t\tcodon_start\t3" in lines
     # qualifier 只出现在最后一个区段行之后
-    assert lines.index("\t\t\tgene\ttef1") > lines.index("401\t849\tCDS")
+    assert lines.index("\t\t\tgene\ttef1") > lines.index("401\t849")
 
 
 def test_minus_descending_and_markers():
@@ -31,7 +34,7 @@ def test_minus_descending_and_markers():
                 qualifiers={})
     lines = feature_lines(f)
     assert lines[0] == ">1300\t1001\tCDS"   # 互补链降序；5' partial 在高坐标端
-    assert lines[1] == "900\t452\tCDS"
+    assert lines[1] == "900\t452"           # 后续区段行不带 key
 
 
 def test_source_first_and_gene_before_cds():

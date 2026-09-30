@@ -361,7 +361,8 @@ def test_reference_features_text(window, ref_record_seq, ref_gb_text):
     text = window.page_review._reference_features_text()
     assert text is not None
     assert text.startswith(">Feature REF00001.1")
-    assert "201\t600\tCDS" in text and "701\t1149\tCDS" in text      # 参考坐标原样
+    # join 的后续区段行不带 feature key（NCBI feature_table 规范）
+    assert "201\t600\tCDS" in text and "701\t1149" in text and "701\t1149\tCDS" not in text
     assert "\tsource" not in text and "organism" not in text         # source 信息已去掉
     assert "\t\t\tprotein_id\tNP_999.1" in text                      # 参考原有 qualifier 保留
     assert "codon_start" not in text                                 # 参考 CDS 完整，无该限定符

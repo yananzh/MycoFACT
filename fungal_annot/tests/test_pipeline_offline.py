@@ -33,7 +33,8 @@ def test_end_to_end_plus(ref_record_seq, ref_gb_text, tmp_path):
 
     assert tbl.startswith(">Feature user_seq")
     assert "<1\t300\tCDS" in tbl                  # exon1 裁剪 + partial
-    assert "401\t852\tCDS" in tbl                 # exon2（含 3bp 插入偏移）
+    assert "401\t852" in tbl and "401\t852\tCDS" not in tbl  # exon2 行不带 key（NCBI 规范）
+    assert tbl.count("\tCDS") == 1                # join CDS 只有一个 feature key
     assert "\t\t\tcodon_start\t3" in tbl          # m=100 → codon_start=3（五列格式）
     assert "\t\t\tgene\ttef1" in tbl
     assert "\t\t\tproduct\ttranslation elongation factor 1-alpha" in tbl
@@ -202,7 +203,7 @@ def test_end_to_end_reverse(ref_record_seq, ref_gb_text):
     assert res.provenance.orientation == "reverse"
     # 互补链：区段降序 + partial 标记在高坐标端
     assert ">1300\t1001\tCDS" in res.tbl_text
-    assert "900\t452\tCDS" in res.tbl_text
+    assert "900\t452" in res.tbl_text and "900\t452\tCDS" not in res.tbl_text
     assert "\t\t\tcodon_start\t3" in res.tbl_text
 
 
@@ -213,7 +214,7 @@ def test_end_to_end_complete_cds_green(ref_record_seq, ref_gb_text):
     res = annotate_sequence(_mk(q), CFG, reference_gb_text=ref_gb_text)
     assert res.status == "green", [f"{i.level}:{i.message}" for i in res.issues]
     assert "1\t400\tCDS" in res.tbl_text
-    assert "501\t949\tCDS" in res.tbl_text
+    assert "501\t949" in res.tbl_text and "501\t949\tCDS" not in res.tbl_text
     assert "<1\t400" not in res.tbl_text and "949>\t" not in res.tbl_text
 
 
