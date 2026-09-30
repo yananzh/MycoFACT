@@ -24,8 +24,11 @@ along the alignment coordinates — producing the five-column feature tables (.t
 for submission. The CLI additionally emits paired .fsa files and a validation report;
 the GUI exports .tbl only.
 
-Supported markers: LSU, SSU, tef1, rpb1, rpb2, tub2, act, cal, chs, and mitochondrial
-markers (mtLSU, mtSSU, cox1, cob, nad1/nad2/nad4/nad5, atp6, rps3).
+Tailored presets cover the common markers: LSU, SSU, tef1, rpb1, rpb2, tub2, act, cal,
+chs, plus mitochondrial markers (mtLSU, mtSSU, cox1, cob, nad1/nad2/nad4/nad5, atp6,
+rps3 — all flagged for manual confirmation). Genes outside this list are supported too:
+they fall back to the Generic preset (broad feature whitelist, codon table taken from
+the reference record).
 
 ## How it works
 
