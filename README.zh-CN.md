@@ -22,10 +22,11 @@
 参考 GenBank 记录的注释会按比对坐标迁移到查询序列上——自动产出可直接提交的五列
 feature table（.tbl）。命令行额外产出配套 .fsa 文件与验证报告；界面导出仅 .tbl。
 
-内置常见 marker 的专属预设：LSU、SSU、tef1、rpb1、rpb2、tub2、act、cal、chs，以及
-线粒体 marker（mtLSU、mtSSU、cox1、cob、nad1/nad2/nad4/nad5、atp6、rps3——均需人工
-确认）。不在列表中的基因同样支持：自动落入 Generic 兜底预设（宽松的 feature 白名单，
-密码表取自参考记录）。
+内置常见 marker 的专属预设：ITS（含 5.8S）、LSU、SSU、tef1、rpb1、rpb2、tub2、tub1、
+act、cal、chs、gapdh、his3、tsr1、mcm7，以及标准线粒体基因集（mtLSU、mtSSU、
+cox1/cox2/cox3、cob、nad1/nad2/nad3/nad4/nad4L/nad5/nad6、atp6/atp8/atp9、rps3——
+均需人工确认）。不在列表中的基因同样支持：自动落入 Generic 兜底预设（宽松的
+feature 白名单，密码表取自参考记录）。
 
 ## 工作流程
 
