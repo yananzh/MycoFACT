@@ -275,7 +275,7 @@ class PageImport(QWidget):
         elif self.win._blast_pending > 0:
             reason = "BLAST queue is running - wait for it to finish. "
         elif not email_ok:
-            reason = "Set your NCBI contact email in menu ▸ Settings (Ctrl+,) first. "
+            reason = "Set your NCBI contact email in menu ▸ Settings first. "
         self.b_blast.setEnabled((n > 0 or has_input) and email_ok
                                 and self.win._blast_pending == 0)
         self.b_blast.setToolTip("" if self.b_blast.isEnabled()

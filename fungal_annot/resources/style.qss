@@ -94,6 +94,8 @@ QProgressBar::chunk { background: #2D7DD2; border-radius: 5px; }
 
 /* ---- 标签 ---- */
 QLabel#Hint { color: #57606a; font-size: 9.5pt; }
+QLabel#AboutTitle { font-size: 16pt; font-weight: 600; }
+QLabel#AboutVersion { color: #57606a; font-size: 9.5pt; letter-spacing: 1px; }
 QLabel#EmptyState { color: #8b949e; font-size: 12pt; }
 QLabel#PageTitle { font-size: 13pt; font-weight: 600; }
 QLabel#Chip {

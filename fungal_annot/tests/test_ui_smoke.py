@@ -53,16 +53,15 @@ def test_steps_laid_out_horizontally(qtbot, window):
 
 def test_icon_toolbar_replaced_by_menu_bar(window):
     """原图标工具栏（New/Open/Save/Settings/Log）改为文字菜单栏；
-    后精简为 Settings / Guide / About 三个直接动作（点击即执行，无子菜单）。"""
+    后精简为 Settings / Guide / About 三个直接动作，无子菜单、无快捷键
+    （软件不设快捷键；更新检查入口在 About 弹窗内，不单列菜单项）。"""
     from PyQt6.QtWidgets import QToolBar
 
     assert window.findChildren(QToolBar) == []
     actions = window.menuBar().actions()
     assert [a.text() for a in actions] == ["Settings", "Guide", "About"]
     assert all(a.menu() is None for a in actions)          # 直接动作，无下拉
-    acts = {a.text(): a for a in actions}
-    assert acts["Settings"].shortcut().toString() == "Ctrl+,"
-    assert acts["Guide"].shortcut().toString() == "F1"
+    assert all(a.shortcut().toString() == "" for a in actions)   # 不注册快捷键
 
 
 def test_log_dock_removed_status_bar_summarises(window):
@@ -980,25 +979,95 @@ def test_page_help_buttons_and_guides(window):
         assert must_have in html
 
 
-def test_app_guide_term_and_about_dialogs(window):
-    """菜单 Guide/F1 是全软件使用指南（非单页）：四步流程、设置、状态规则、
-    提交路径齐备；术语词条与 About 弹窗走统一样式外壳，均可构建。"""
-    from PyQt6.QtWidgets import QDialog
+def test_app_guide_term_and_about_dialogs(window, qtbot):
+    """菜单 Guide 是全软件使用指南（非单页）：四步流程、设置、状态规则、
+    提交路径齐备且不含快捷键说明；术语词条与 About 弹窗均可构建
+    （About 为原生控件 widgets/about.py，不走 HTML 外壳）。"""
+    from PyQt6.QtWidgets import QDialog, QLabel
 
-    from fungal_annot.ui.widgets.help import (APP_GUIDE, build_about_dialog,
-                                              build_app_guide_dialog,
+    from fungal_annot.paths import resource_path
+    from fungal_annot.ui.widgets.about import build_about_dialog
+    from fungal_annot.ui.widgets.help import (APP_GUIDE, build_app_guide_dialog,
                                               build_term_help_dialog)
 
     dlg = build_app_guide_dialog(window)
     assert dlg.windowTitle() == "User Guide"
     body = APP_GUIDE[1]
     for must in ("Import", "Select Reference", "Review Annotation",
-                 "Export Results", "BankIt", "F1", "Ctrl+,", "Ready"):
+                 "Export Results", "BankIt", "Ready"):
         assert must in body, must
-    # 术语词条与 About 也能构建（统一样式外壳，均为 QDialog）
+    for banned in ("F1", "Ctrl+,", "shortcut", "Shortcut"):
+        assert banned not in body, banned            # 软件不设快捷键，文案同步
+    # 术语词条也能构建
     assert build_term_help_dialog("codon_start", window).windowTitle() == "codon_start"
+
+    # About：原生控件弹窗——标题/版本 objectName 有对应 qss 规则，版本号可见
     about = build_about_dialog("9.9.9", window)
+    qtbot.addWidget(about)
     assert isinstance(about, QDialog) and about.windowTitle() == "About"
+    title = about.findChild(QLabel, "AboutTitle")
+    ver = about.findChild(QLabel, "AboutVersion")
+    assert title is not None and title.text() == "MycoFACT"
+    assert ver is not None and "9.9.9" in ver.text()
+    qss = open(resource_path("fungal_annot", "resources", "style.qss"),
+               encoding="utf-8").read()
+    for sel in ("QLabel#AboutTitle", "QLabel#AboutVersion"):
+        assert sel in qss, sel
+
+
+def test_about_dialog_update_flow(window, qtbot, monkeypatch):
+    """About 更新检查两条路径 + 失败路径：有新版 → 弹 UpdateAvailableDialog
+    （stub 掉 exec 防阻塞）；已最新 → 就地提示；异常 → QMessageBox 警告。"""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from fungal_annot.core import updater
+    from fungal_annot.ui.widgets.about import AboutDialog
+
+    dlg = AboutDialog("0.1.0", window)
+    qtbot.addWidget(dlg)
+
+    shown = []
+
+    class _StubUpdate:
+        def __init__(self, *a, **k):
+            shown.append(self)
+            self.execed = False
+
+        def exec(self):
+            self.execed = True
+
+    monkeypatch.setattr("fungal_annot.ui.widgets.about.UpdateAvailableDialog",
+                        _StubUpdate)
+
+    # 有新版本：后台线程返回 info → 弹出 UpdateAvailableDialog，按钮恢复可用
+    info = {"version": "0.2.0", "url": "https://example.com/rel",
+            "name": "v0.2.0", "published_at": "", "notes": "- fix a\n- add b"}
+    monkeypatch.setattr(updater, "check_for_update", lambda v, **kw: info)
+    dlg.check_updates()
+    qtbot.waitUntil(lambda: bool(shown) and shown[0].execed
+                    and dlg.b_check.isEnabled())
+    assert dlg.update_status.text() == ""
+
+    # 已最新：就地提示，不弹任何窗
+    monkeypatch.setattr(updater, "check_for_update", lambda v, **kw: None)
+    dlg.check_updates()
+    qtbot.waitUntil(lambda: dlg.b_check.isEnabled()
+                    and "up to date" in dlg.update_status.text())
+    assert len(shown) == 1
+
+    # 失败：QMessageBox 警告（stub 掉静态方法），按钮恢复可用
+    warned = []
+
+    def _fake_warning(*a, **k):
+        warned.append(True)
+        return QMessageBox.StandardButton.Ok
+
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(_fake_warning))
+    monkeypatch.setattr(updater, "check_for_update",
+                        lambda v, **kw: (_ for _ in ()).throw(
+                            updater.UpdateCheckError("offline")))
+    dlg.check_updates()
+    qtbot.waitUntil(lambda: dlg.b_check.isEnabled() and bool(warned))
 
 
 # ---- 队列生命周期修复回归（2026-09-29：STOP 取消 / 失败对称 / 项目切换作废）----

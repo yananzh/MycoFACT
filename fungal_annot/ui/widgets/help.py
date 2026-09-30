@@ -1,8 +1,9 @@
 """帮助系统（统一样式的 HTML 弹窗）：三块内容 + 一套渲染基建。
 
 内容：HELP 术语词条（就地解释）、PAGE_HELP 四页指南（每页 Help 按钮）、
-APP_GUIDE 全软件使用指南（菜单 Guide / F1——菜单级帮助是整个软件的使用说明，
-而非当前页）；另有 About 弹窗（菜单栏）与 show_help 词条弹窗。
+APP_GUIDE 全软件使用指南（菜单 Guide——菜单级帮助是整个软件的使用说明，
+而非当前页）；另有 show_help 词条弹窗。About 弹窗在 widgets/about.py（原生
+控件 + 更新检查），不复用本模块的 HTML 外壳，但共用 DISCLAIMER 文案。
 
 渲染基建：Qt 富文本只支持 CSS 子集——<style> 块的元素选择器可用（Qt 6 实测），
 但横幅、提示框、数据表一律用表格单元格实现（background-color 与 padding 在
@@ -31,6 +32,10 @@ MARKER_HINT = ("Marker gene preset (tef1, act, LSU...) chosen automatically from
                "hit titles during annotation - it controls which features are "
                "transferred (CDS vs rRNA) and the genetic code. Shows 'auto-detect' "
                "until then.")
+
+# 提交免责声明（APP_GUIDE / 旧 About / 新 About 弹窗共用一句，避免多处漂移）
+DISCLAIMER = ("Results are drafting aids - verify against current NCBI rules "
+              "before submitting.")
 
 
 # ---- 渲染基建：小块拼装 ----------------------------------------------------
@@ -171,7 +176,7 @@ remaining queue.</li>
     ("Marker", "Which locus the sequence is (tef1, act, LSU, ...) - auto-detected "
                "from BLAST titles; decides which features are transferred and the "
                "genetic code."),
-    ("NCBI email", "Required for online BLAST - set it in menu ▸ Settings (Ctrl+,)."),
+    ("NCBI email", "Required for online BLAST - set it in menu ▸ Settings."),
     ("BLAST state", f"<code>-</code> queued · <span style='color:{YELLOW}'>running…"
                     f"</span> searching · <span style='color:{GREEN}'>done</span> "
                     "hits stored."),
@@ -187,7 +192,7 @@ time.</li>
 <h3>Common problems</h3>
 {_fix_table((
     ("BLAST is disabled", "Box empty, queue running, or email missing - set it in "
-                          "menu ▸ Settings (Ctrl+,)."),
+                          "menu ▸ Settings."),
     ("Non-nucleotide characters ...", "Input has letters outside the DNA alphabet - "
                                       "fix it and press BLAST again."),
     ("Duplicate Seq ID", "Rename one (double-click the Seq ID in the list)."),
@@ -350,7 +355,7 @@ def build_page_help_dialog(term: str, parent=None) -> QDialog:
     title, body = PAGE_HELP[term]
     page, subtitle = _PAGE_META[term]
     html = _wrap(page, subtitle, body,
-                 footer="Press <b>F1</b> for the full user guide of the whole app.")
+                 footer="The full user guide is in menu ▸ Guide.")
     return _help_dialog(title, html, (720, 600), parent)
 
 
@@ -410,7 +415,7 @@ HELP = {
                  "<p>Below the threshold the sequence is flagged " + _status_chip("red")
                  + " on step 3: a distant reference may have misplaced exon boundaries, "
                    "so a human should confirm the choice.</p>"
-                 + _note("Change the threshold in menu ▸ Settings (Ctrl+,); press "
+                 + _note("Change the threshold in menu ▸ Settings; press "
                          "<b>Re-check all</b> on step 3 to re-evaluate existing results.")),
 }
 
@@ -427,7 +432,7 @@ def show_help(term: str, parent=None):
     build_term_help_dialog(term, parent).exec()
 
 
-# ---- 全软件使用指南（菜单 Guide / F1）----
+# ---- 全软件使用指南（菜单 Guide）----
 _APP_STEPS = _table(
     ("Step", "Page", "What you do", "What you get"),
     ((_chip("1", "#ffffff", ACCENT), "<b>Import &amp; BLAST</b>",
@@ -452,15 +457,6 @@ _APP_STATUS = _table(
                            "then.")),
     widths=(175,))
 
-_APP_SHORTCUTS = _table(
-    ("Where", "Action"),
-    (("<b>F1</b>", "This guide - from anywhere."),
-     ("<b>Ctrl+,</b>", "Settings: email, identity threshold, references compared."),
-     ("Help button on each page", "Step-specific guide."),
-     ("Double-click a Seq ID (step 1)", "Rename - hits, results and confirmations "
-                                        "follow.")),
-    widths=(210,))
-
 APP_GUIDE = ("User Guide", f"""
 <h3>What this tool does</h3>
 <p>For each fungal marker amplicon, find a close reference on NCBI, transfer its
@@ -471,7 +467,7 @@ BankIt expects - one file per sequence.</p>
 {_APP_STEPS}
 <p style="margin-top:8px;">{_note("Steps unlock in order - hover a locked step for the reason; click any unlocked step to jump.")}</p>
 
-<h3>Settings (Ctrl+,)</h3>
+<h3>Settings</h3>
 <p>Three settings - everything else runs on sensible defaults:</p>
 <ul>
 <li><b>NCBI contact email</b> - required for the online BLAST.</li>
@@ -489,9 +485,6 @@ step 4 (summary) and the status bar.</p>
 the <b>BankIt</b> portal upload them with your original FASTA; organism and
 source modifiers are entered there.</p>
 
-<h3>Menus and shortcuts</h3>
-{_APP_SHORTCUTS}
-
 <h3>Good to know</h3>
 <ul>
 <li><b>BLAST again</b> skips sequences with hits; <b>STOP</b> cancels the rest.</li>
@@ -506,7 +499,7 @@ _APP_SUBTITLE = ("MycoFACT · from raw amplicon "
 
 
 def build_app_guide_dialog(parent=None) -> QDialog:
-    """构建全软件使用指南弹窗（菜单 Guide / F1 的内容）。"""
+    """构建全软件使用指南弹窗（菜单 Guide 的内容）。"""
     title, body = APP_GUIDE
     html = _wrap(title, _APP_SUBTITLE, body,
                  footer="Every page also has its own <b>Help</b> button with "
@@ -515,27 +508,5 @@ def build_app_guide_dialog(parent=None) -> QDialog:
 
 
 def show_app_guide(parent=None):
-    """弹出全软件使用指南（菜单 Guide / F1）。"""
+    """弹出全软件使用指南（菜单 Guide）。"""
     build_app_guide_dialog(parent).exec()
-
-
-# ---- About（菜单栏）----
-def build_about_dialog(version: str, parent=None) -> QDialog:
-    body = f"""
-<p>Reference-annotation transfer for fungal marker sequences: BLAST a close
-reference, transfer its annotation, review and fix it, and export BankIt-ready
-five-column <code>.tbl</code> feature tables.</p>
-<p>Four steps - <b>Import &amp; BLAST</b> → <b>Select Reference</b> →
-<b>Review Annotation</b> → <b>Export Results</b>. Press <b>F1</b> for the full
-user guide; every page has its own Help button.</p>
-{_note("Results are drafting aids - verify against current NCBI rules before submitting.", "warn")}
-"""
-    html = _wrap("MycoFACT",
-                 f"Version {version} · fungal feature annotation & comparison tool "
-                 f"(reference-annotation transfer for fungal marker sequences)", body)
-    return _help_dialog("About", html, (620, 400), parent)
-
-
-def show_about(version: str, parent=None):
-    """弹出关于弹窗（菜单栏 About）。"""
-    build_about_dialog(version, parent).exec()

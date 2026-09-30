@@ -24,7 +24,8 @@ from .pages.page_export import PageExport
 from .pages.page_import import PageImport
 from .pages.page_reference import PageReference
 from .pages.page_review import PageReview
-from .widgets.help import show_about, show_app_guide
+from .widgets.about import AboutDialog
+from .widgets.help import show_app_guide
 from .widgets.step_bar import StepBar
 
 
@@ -144,13 +145,11 @@ class MainWindow(QMainWindow):
         v.addWidget(self.stack, 1)
         self.setCentralWidget(central)
 
-        # ---- 菜单栏：三个直接动作（点击即执行，无子菜单）----
+        # ---- 菜单栏：四个直接动作（点击即执行，无子菜单，无快捷键）----
         bar = self.menuBar()
         act = bar.addAction("Settings")
-        act.setShortcut("Ctrl+,")
         act.triggered.connect(self._open_settings)
         act = bar.addAction("Guide")
-        act.setShortcut("F1")
         act.triggered.connect(self._show_app_guide)
         act = bar.addAction("About")
         act.triggered.connect(self._show_about)
@@ -532,10 +531,10 @@ class MainWindow(QMainWindow):
             self.log("Settings saved.")
 
     def _show_app_guide(self):
-        """F1 / 菜单 Guide：全软件使用指南（四步流程、设置、状态规则、提交路径）；
+        """菜单 Guide：全软件使用指南（四步流程、设置、状态规则、提交路径）；
         单页的操作细节由各页按钮区的 Help 提供，两者不混用。"""
         show_app_guide(self)
 
     def _show_about(self):
         from .. import __version__
-        show_about(__version__, self)
+        AboutDialog(__version__, self).exec()
