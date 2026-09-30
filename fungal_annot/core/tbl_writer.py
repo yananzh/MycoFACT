@@ -52,6 +52,32 @@ def write_tbl(features, seq_id: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def tbl_text_from(features, seq_id: str, fallback: str = "") -> str:
+    """.tbl 文本的唯一来源：有 feature 时按 feature **现算**。
+
+    调用方（导出、项目保存）必须走这里，不得直接读结果对象上缓存的文本——
+    features 与缓存文本是两份数据源，编辑后两者会不一致（导出写出旧表的
+    历史缺陷即源于此）。fallback 仅用于无 feature 的结果（失败态的存量文本，
+    通常为空串）。
+    """
+    if features:
+        return write_tbl(features, seq_id)
+    return fallback
+
+
+def has_feature_lines(text: str) -> bool:
+    """五列表文本是否含真正的 feature 行（除 >Feature 记录头与空行外还有内容）。
+
+    只有一条 >Feature 头的 .tbl 对提交毫无意义（BankIt 视为零产出），
+    因此不得当成功产物写出。
+    """
+    for line in (text or "").splitlines():
+        stripped = line.rstrip()
+        if stripped and not stripped.startswith(">Feature"):
+            return True
+    return False
+
+
 def write_combined_tbl(tbl_texts: list[str]) -> str:
     """多记录 feature table：各序列的 >Feature 块顺序拼接成一个汇总文件，
     BankIt 多记录提交可整文件上传。空文本（红灯失败序列）直接跳过。"""

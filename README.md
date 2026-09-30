@@ -134,6 +134,11 @@ python main.py presets
 | `all_features.tbl` | All annotated records' `>Feature` blocks combined into a single multi-record file, uploadable as a whole to BankIt (omitted when no sequence produced features) |
 | `validation_report.csv` | Overall validation report |
 
+Sequences for which nothing could be transferred (no feature matched the transfer
+whitelist, or every candidate segment was dropped) are reported as errors and produce
+**no `.tbl`/`.fsa`** — an empty `>Feature` stub is rejected by BankIt, so a missing file
+means "this one needs attention", not "this one is fine".
+
 ## Project structure
 
 ```text

@@ -7,6 +7,7 @@
 - gene 201..1149；source 带参考菌株修饰符（不得迁移，§2.4）
 """
 import io
+import os
 import random
 
 import pytest
@@ -15,6 +16,10 @@ from Bio.Seq import Seq
 from Bio.SeqFeature import (BeforePosition, CompoundLocation, SeqFeature,
                             SimpleLocation)
 from Bio.SeqRecord import SeqRecord
+
+# 离屏渲染：CI 的 headless Linux 与本地无显示环境都需要显式指定平台插件。
+# 在 conftest 里统一 setdefault，任何引入 Qt 的测试模块（新加的也一样）都不必重复。
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 # 密码子池：全部以 G/C 结尾、不以 T 开头且不含 "TA"/"TG" 子串——任何拼接顺序、
 # 任何读码框都不可能产生终止密码子（框内插入 TAA 的测试除外）
@@ -38,6 +43,15 @@ def _make_cds(length: int) -> str:
             prot = prot[:-1]
         assert "*" not in prot, f"frame {f} 出现内部终止子"
     return s
+
+
+@pytest.fixture
+def window(qtbot):
+    """四页向导主窗口（离屏渲染）。UI 测试共用，避免每个文件各写一份夹具。"""
+    from fungal_annot.ui.main_window import MainWindow
+    win = MainWindow()
+    qtbot.addWidget(win)
+    yield win
 
 
 @pytest.fixture(scope="session")

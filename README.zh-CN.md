@@ -121,6 +121,10 @@ python main.py presets
 | `all_features.tbl` | 所有已注释序列的 `>Feature` 记录合并为一个多记录文件，可整文件上传 BankIt（无任何序列产出 feature 时不生成） |
 | `validation_report.csv` | 总体验证报告 |
 
+没有任何 feature 可迁移的序列（参考记录无匹配白名单的 feature，或全部区段被丢弃）
+会报 error，且**不产出 `.tbl`/`.fsa`**：只有 `>Feature` 记录头的空表会被 BankIt 拒收，
+因此"没有文件"意味着该序列需要人工处理，而不是"没问题"。
+
 ## 项目结构
 
 ```text

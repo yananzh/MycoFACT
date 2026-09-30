@@ -10,13 +10,7 @@ import pytest  # noqa: E402
 
 from PyQt6.QtWidgets import QLabel, QPlainTextEdit
 
-
-@pytest.fixture
-def window(qtbot):
-    from fungal_annot.ui.main_window import MainWindow
-    win = MainWindow()
-    qtbot.addWidget(win)
-    yield win
+# window 夹具已上移到 conftest.py（UI 测试共用）
 
 
 @pytest.fixture(autouse=True)

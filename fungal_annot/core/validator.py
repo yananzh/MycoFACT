@@ -85,6 +85,22 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
                             f"Seq ID '{seq_input.seq_id}' contains spaces or invalid characters"
                             "(allowed: alphanumerics and . _ : - | +); must match the FASTA header"))
 
+    # ---- 零产出：没有任何可提交 feature 时必须报错，不得绿灯放行 ----
+    # 只有 >Feature 记录头的 .tbl 会被 BankIt 拒收，导出侧也会跳过它；
+    # 若不在这里报 error，用户看到的是"绿灯 + 空表"这一最坏组合。
+    if not features:
+        if not ref_features:
+            issues.append(Issue(
+                "error", "no_reference_features",
+                f"The reference record has no feature matching the "
+                f"'{preset.name if preset else 'selected'}' preset whitelist - "
+                "choose another reference or gene preset"))
+        else:
+            issues.append(Issue(
+                "error", "no_features_transferred",
+                "No feature could be transferred from the reference (every candidate "
+                "segment was dropped) - manual review required"))
+
     # ---- 坐标范围 + N 区段边界 ----
     for f in features:
         for p in f.parts:
@@ -182,6 +198,15 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
                             if mapping.ref_seq[pos - 1] == mapping.query_seq[mapping.ref_to_query[pos] - 1]:
                                 eq += 1
         nt = (eq / tot) if tot else None
+        if nt is None:
+            # 查不了 ≠ 通过：CDS 全无参考坐标（手工新增的行、或溯源丢失）时
+            # 门禁无法计算，必须显式提示，不得静默跳过（历史缺陷：编辑后
+            # 该门禁消失，低相似序列被误判为绿灯）
+            issues.append(Issue(
+                "warning", "ref_context_missing",
+                "No reference coordinates are available for the CDS, so the nucleotide "
+                "identity gate and the reference back-checks were skipped; "
+                "verify the coordinates against the reference manually"))
     else:
         nt = mapping.identity()
     if nt is not None and nt * 100 < cfg.identity_threshold:

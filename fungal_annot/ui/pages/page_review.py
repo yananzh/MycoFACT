@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QFrame, QHBoxLayout,
                              QMessageBox, QPlainTextEdit, QPushButton, QRadioButton,
                              QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from ...core.tbl_writer import write_tbl
+from ...core.tbl_writer import tbl_text_from, write_tbl
 from ...core.validator import status_of, validate
 from ..widgets.feature_table import FeatureTable
 from ..widgets.help import (STATUS_COLOR as _STATUS_COLOR,
@@ -484,6 +484,10 @@ class PageReview(QWidget):
             res.features = self.feature_table.to_features()
         except ValueError:
             pass    # 半成品行：保留上次有效 features，防抖重验会照常提示
+        else:
+            # 缓存文本与 features 同步刷新（导入侧不再读它，但项目保存会写，
+            # 留着旧文本会让 .json 里冻结一份与表格不符的表）
+            res.tbl_text = tbl_text_from(res.features, res.seq_id)
         self._reval_timer.start(600)
 
     def _auto_revalidate(self):
@@ -506,7 +510,7 @@ class PageReview(QWidget):
         # 重验只替换 validate() 的输出；管线早期/迁移期的提示（base_issues）原样保留
         res.issues = list(res.detail.base_issues) + issues
         res.status = status_of(res.issues)
-        res.tbl_text = write_tbl(features, sid)
+        res.tbl_text = tbl_text_from(features, sid)
         self._populate_variant_table(sid)
         self._update_issues_hint(sid)
         self._refresh_seq_row(sid)
@@ -526,7 +530,7 @@ class PageReview(QWidget):
                                   res.detail.preset, self.win.make_config())
                 res.issues = list(res.detail.base_issues) + issues
                 res.status = status_of(res.issues)
-                res.tbl_text = write_tbl(res.features, s.seq_id)
+                res.tbl_text = tbl_text_from(res.features, s.seq_id)
                 n += 1
         self.refresh()
         if self.current:

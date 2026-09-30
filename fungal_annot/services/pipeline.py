@@ -14,7 +14,8 @@ from ..core.feature_transfer import transfer_features
 from ..core.gb_fetcher import GbFetchError, fetch_gb_text, parse_gb
 from ..core.models import Issue, Provenance, SeqInput
 from ..core.presets import detect_from_titles, get as get_preset
-from ..core.tbl_writer import write_combined_tbl, write_fsa, write_report_csv, write_tbl
+from ..core.tbl_writer import (has_feature_lines, tbl_text_from, write_combined_tbl,
+                               write_fsa, write_report_csv)
 from ..core.validator import status_of, validate
 
 
@@ -211,7 +212,9 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
             base_issues=base_issues)
 
         # ---- 5. 导出文本 ----
-        res.tbl_text = write_tbl(features, seq_input.seq_id)
+        # 无 feature 时留空串（而非只有记录头的文本）：零产出不得看起来像产物，
+        # 导出侧也据此跳过该序列（core.tbl_writer.has_feature_lines）
+        res.tbl_text = tbl_text_from(features, seq_input.seq_id)
         res.fsa_text = write_fsa(seq_input.seq_id, seq_input.seq)
         if progress:
             progress("done", 1.0)
@@ -256,17 +259,26 @@ def write_outputs(results: list[SeqResult], out_dir: str,
                   seq_inputs: list[SeqInput] | None = None,
                   with_fsa: bool = True, with_report: bool = True,
                   with_combined: bool = True,
-                  stems: list[str] | None = None) -> list[str]:
+                  stems: list[str] | None = None,
+                  skipped: list[str] | None = None) -> list[str]:
     """写出 .tbl（每条序列一个）与可选的 .fsa / 验证报告 CSV / 多记录汇总
     all_features.tbl，返回文件路径列表。
 
     stems 与 results 对齐的文件名主干覆盖（多参考对比导出未采纳 variant 时用
     "<seq_id>__<accession>"）；缺省取 _safe_stem(seq_id)。
 
+    零产出的结果（无 feature 行——迁移全部落空或管线失败）**不写 .tbl/.fsa**：
+    只有 >Feature 记录头的表 BankIt 会拒收，0 字节文件混在产物里会被误当成功。
+    其 seq_id 收进 skipped（可选输出参数，供界面提示"哪些序列没有产出"）；
+    验证报告仍逐条记录（失败也要留证据）。
+
+    .tbl 文本一律由 features 现算（core.tbl_writer.tbl_text_from），不读结果对象
+    上缓存的文本——否则审核页编辑后导出会写出旧表。
+
     BankIt 门户模式（GB2sequin 同款工作流）：.tbl 只含 gene/CDS 等 feature，
     不含 source——organism 与来源修饰符在门户表单采集（§7.2 P1/P5）。
     汇总文件按 SeqResult 顺序拼接各序列的 >Feature 块（多记录格式，可整文件
-    提交 BankIt）；全部序列失败（tbl_text 为空）时不产出。界面导出只要
+    提交 BankIt）；没有任何序列产出 feature 时不产出汇总文件。界面导出只要
     .tbl（序列本身已在序列表、验证摘要已在审核页呈现）；with_fsa / with_report
     供 CLI 与测试保留完整产物。
     """
@@ -286,13 +298,17 @@ def write_outputs(results: list[SeqResult], out_dir: str,
                 # 且工作线程不得回写共享 SeqInput）；项目加载态回退序列标签
                 row["gene_type"] = r.gene_type or s.gene_type
             rows.append(row)
+        body = tbl_text_from(r.features, r.seq_id, r.tbl_text)
+        if not has_feature_lines(body):
+            if skipped is not None:
+                skipped.append(r.seq_id)
+            continue
         stem = _safe_stem(stems[i]) if stems and i < len(stems) else _safe_stem(r.seq_id)
         tbl = _unique_path(out_dir, stem, ".tbl", used)
         with open(tbl, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(r.tbl_text)
+            fh.write(body)
         written.append(tbl)
-        if r.tbl_text:
-            combined_texts.append(r.tbl_text)
+        combined_texts.append(body)
         if with_fsa:
             fsa = _unique_path(out_dir, stem, ".fsa", used)
             with open(fsa, "w", encoding="utf-8", newline="\n") as fh:

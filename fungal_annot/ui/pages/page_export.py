@@ -165,9 +165,11 @@ class PageExport(QWidget):
             if not variants:
                 continue
             chosen_results.append(variants[self.win.chosen_accession(s.seq_id)])
+        skipped: list[str] = []
         try:
             written = write_outputs(chosen_results, out, inputs,
-                                    with_fsa=False, with_report=False)
+                                    with_fsa=False, with_report=False,
+                                    skipped=skipped)
         except OSError as ex:
             # 无效盘符/只读目录等写盘失败：弹窗告知，而非全局 excepthook 兜底成
             # 状态栏一行 traceback 尾巴
@@ -177,10 +179,18 @@ class PageExport(QWidget):
         self.win.last_export_dir = out
         self.win.exported = True
         self.win.update_summary()
-        self.win.log(f"Exported {len(written)} .tbl file(s) to {out}")
-        QMessageBox.information(self, "Export done",
-                                f"Wrote {len(written)} .tbl file(s) to:\n{out}\n\n"
-                                + "\n".join(os.path.basename(w) for w in written))
+        msg = (f"Wrote {len(written)} .tbl file(s) to:\n{out}\n\n"
+               + "\n".join(os.path.basename(w) for w in written))
+        if skipped:
+            # 零产出序列不写文件（只有 >Feature 头的表 BankIt 会拒收），
+            # 但必须让用户知道是哪些序列、以及数量对不上
+            msg += ("\n\nNo feature table written for: " + ", ".join(skipped)
+                    + "\n(no feature could be transferred - check the reference "
+                      "and the gene preset for these sequences)")
+        self.win.log(f"Exported {len(written)} .tbl file(s) to {out}"
+                     + (f" ({len(skipped)} sequence(s) produced no feature table)"
+                        if skipped else ""))
+        QMessageBox.information(self, "Export done", msg)
 
     def _open_folder(self):
         out = self.dir_edit.text().strip()

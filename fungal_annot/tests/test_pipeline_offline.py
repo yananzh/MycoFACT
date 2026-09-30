@@ -3,9 +3,13 @@ import io
 import os
 
 from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.SeqFeature import SeqFeature, SimpleLocation
+from Bio.SeqRecord import SeqRecord
 
 from fungal_annot.core.align_mapper import revcomp
-from fungal_annot.core.models import SeqInput
+from fungal_annot.core.models import Feature, FeaturePart, SeqInput
+from fungal_annot.core.tbl_writer import write_tbl
 from fungal_annot.services.pipeline import (PipelineConfig, SeqResult,
                                             annotate_sequence, write_outputs)
 from .conftest import query_plus_insertion
@@ -247,10 +251,14 @@ def test_gap_in_query_becomes_structured_error(ref_record_seq, ref_gb_text):
 def test_write_outputs_sanitises_windows_unsafe_seq_id(tmp_path):
     """回归：Seq ID 含 '|' / ':'（GenBank 合法、Windows 非法文件名字符）时
     导出不崩溃，且清洗后同名的两条不得互相覆盖。"""
-    res1 = SeqResult(seq_id="gi|123|ref|X.1", tbl_text=">Feature gi|123|ref|X.1\n")
-    res2 = SeqResult(seq_id="chr1:100-200", tbl_text=">Feature chr1:100-200\n")
-    res3 = SeqResult(seq_id="a|b", tbl_text=">Feature a|b\n")
-    res4 = SeqResult(seq_id="a:b", tbl_text=">Feature a:b\n")
+    def _mk_res(sid):
+        feats = [Feature(ftype="gene", parts=[FeaturePart(1, 100)])]
+        return SeqResult(seq_id=sid, features=feats), write_tbl(feats, sid)
+
+    res1, t1 = _mk_res("gi|123|ref|X.1")
+    res2, t2 = _mk_res("chr1:100-200")
+    res3, t3 = _mk_res("a|b")
+    res4, t4 = _mk_res("a:b")
     written = write_outputs([res1, res2, res3, res4], str(tmp_path))
     names = {os.path.basename(p) for p in written}
     # '|' 与 ':' 都替换为 '_'；"a|b" 与 "a:b" 清洗后冲突 → 后者追加序号（tbl/fsa 同步）
@@ -258,29 +266,81 @@ def test_write_outputs_sanitises_windows_unsafe_seq_id(tmp_path):
                      "chr1_100-200.tbl", "chr1_100-200.fsa",
                      "a_b.tbl", "a_b.fsa", "a_b_2.tbl", "a_b_2.fsa",
                      "all_features.tbl", "validation_report.csv"}
-    assert (tmp_path / "a_b.tbl").read_text(encoding="utf-8") == ">Feature a|b\n"
-    assert (tmp_path / "a_b_2.tbl").read_text(encoding="utf-8") == ">Feature a:b\n"
+    assert (tmp_path / "a_b.tbl").read_text(encoding="utf-8") == t3
+    assert (tmp_path / "a_b_2.tbl").read_text(encoding="utf-8") == t4
     # 汇总文件按原始 Seq ID 保留各 >Feature 记录头（>Feature 块顺序拼接）
     combined = (tmp_path / "all_features.tbl").read_text(encoding="utf-8")
-    assert combined == (">Feature gi|123|ref|X.1\n>Feature chr1:100-200\n"
-                        ">Feature a|b\n>Feature a:b\n")
+    assert combined == t1 + t2 + t3 + t4
 
 
 def test_write_outputs_combined_summary_skips_failed(tmp_path):
-    """汇总 all_features.tbl：多记录块按序拼接；失败序列（tbl_text 为空）
-    跳过其记录但 per-seq 空文件照常写出；全部失败时不产出汇总。"""
-    res1 = SeqResult(seq_id="s1", tbl_text=">Feature s1\n1\t100\tgene\n")
-    res2 = SeqResult(seq_id="s2", tbl_text=">Feature s2\n1\t80\tgene\n")
-    failed = SeqResult(seq_id="s3")                 # 管线失败：tbl_text 为空
-    written = write_outputs([res1, failed, res2], str(tmp_path), with_fsa=False)
+    """汇总 all_features.tbl：多记录块按序拼接；**零产出序列（失败或没有可迁移
+    feature）不写 .tbl/.fsa**，只在验证报告里留证并计入 skipped（可选输出参数）。"""
+    def _mk_res(sid):
+        feats = [Feature(ftype="gene", parts=[FeaturePart(1, 100)])]
+        return SeqResult(seq_id=sid, features=feats)
+
+    res1, res2 = _mk_res("s1"), _mk_res("s2")
+    failed = SeqResult(seq_id="s3")                 # 管线失败：无 feature
+    skipped = []
+    written = write_outputs([res1, failed, res2], str(tmp_path), with_fsa=False,
+                            skipped=skipped)
     combined = tmp_path / "all_features.tbl"
     assert combined.read_text(encoding="utf-8") == \
-        ">Feature s1\n1\t100\tgene\n>Feature s2\n1\t80\tgene\n"
+        write_tbl(res1.features, "s1") + write_tbl(res2.features, "s2")
     assert {os.path.basename(p) for p in written} == \
-        {"s1.tbl", "s2.tbl", "s3.tbl", "all_features.tbl", "validation_report.csv"}
+        {"s1.tbl", "s2.tbl", "all_features.tbl", "validation_report.csv"}
+    assert skipped == ["s3"]
+    assert not (tmp_path / "s3.tbl").exists()       # 0 字节 .tbl 不得出现在产物里
+    # 失败也要留证据：报告仍逐条记录
+    assert "s3" in (tmp_path / "validation_report.csv").read_text(encoding="utf-8")
 
     all_failed = write_outputs([SeqResult(seq_id="s4")], str(tmp_path / "out2"),
                                with_fsa=False)
     assert not (tmp_path / "out2" / "all_features.tbl").exists()
-    assert {os.path.basename(p) for p in all_failed} == \
-        {"s4.tbl", "validation_report.csv"}
+    assert {os.path.basename(p) for p in all_failed} == {"validation_report.csv"}
+
+
+def test_export_text_is_derived_from_features(tmp_path, ref_record_seq, ref_gb_text):
+    """回归（P0）：结果上缓存的 tbl_text 落后于 features 时，导出必须按 features
+    现算——历史缺陷：审核页改完坐标立即导出，写出的是改前的表。"""
+    seq, _ = ref_record_seq
+    q = seq[300:1600]
+    res = annotate_sequence(_mk(q, seq_id="d1"), CFG, reference_gb_text=ref_gb_text)
+    stale = res.tbl_text
+    cds = next(f for f in res.features if f.ftype == "CDS")
+    cds.qualifiers["note"] = ["changed after render"]   # 模拟编辑后 features 已变
+    write_outputs([res], str(tmp_path), with_fsa=False)
+    text = (tmp_path / "d1.tbl").read_text(encoding="utf-8")
+    assert "changed after render" in text
+    assert text == write_tbl(res.features, "d1")
+    assert text != stale
+
+
+def test_no_transferable_feature_is_error_and_writes_nothing(tmp_path):
+    """参考记录没有任何匹配白名单的 feature（例如只标注了 ITS 的记录）：
+    必须报 error 而不是"绿灯 + 空表"，也不写出只有记录头的 .tbl（BankIt 拒收）。"""
+    rec = SeqRecord(Seq("ACGT" * 300), id="EMPTY0001.1", name="EMPTY0001",
+                    description="synthetic record with no transferable feature")
+    rec.annotations["molecule_type"] = "DNA"
+    src = SeqFeature(SimpleLocation(0, 1200, strand=1), type="source")
+    src.qualifiers = {"organism": ["Testus fungus"]}
+    misc = SeqFeature(SimpleLocation(100, 400, strand=1), type="misc_feature")
+    misc.qualifiers = {"note": ["internal transcribed spacer 1"]}
+    rec.features = [src, misc]
+    buf = io.StringIO()
+    SeqIO.write(rec, buf, "genbank")
+
+    res = annotate_sequence(_mk(("ACGT" * 300)[50:600], seq_id="n1"), CFG,
+                            reference_gb_text=buf.getvalue())
+    assert "no_reference_features" in {i.code for i in res.issues}
+    assert res.status == "red"
+    assert res.tbl_text == ""            # 零产出不留"只有记录头"的文本
+
+    skipped = []
+    written = write_outputs([res], str(tmp_path), skipped=skipped)
+    assert skipped == ["n1"]
+    assert not (tmp_path / "n1.tbl").exists()
+    assert not (tmp_path / "n1.fsa").exists()
+    assert not (tmp_path / "all_features.tbl").exists()
+    assert {os.path.basename(p) for p in written} == {"validation_report.csv"}

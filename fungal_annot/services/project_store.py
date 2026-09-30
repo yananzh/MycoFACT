@@ -12,6 +12,8 @@ import os
 import time
 from dataclasses import dataclass, field
 
+from ..core.tbl_writer import tbl_text_from
+
 PROJECT_VERSION = 2
 
 
@@ -66,7 +68,9 @@ def _result_to_dict(r) -> dict:
         "issues": [{"level": i.level, "code": i.code, "message": i.message}
                    for i in r.issues],
         "provenance": vars(r.provenance),
-        "tbl_text": r.tbl_text,
+        # 与 features 现算保持一致：结果对象上缓存的文本可能落后于表格编辑，
+        # 直接存会把"表与文本不符"冻结进项目文件
+        "tbl_text": tbl_text_from(r.features, r.seq_id, r.tbl_text),
         "fsa_text": r.fsa_text,
         "features": [_feature_to_dict(f) for f in (r.features or [])],
     }
@@ -78,6 +82,8 @@ def _result_from_dict(r):
                         tbl_text=r["tbl_text"], fsa_text=r["fsa_text"])
     res.gene_type = r.get("gene_type", "")
     res.features = [_feature_from_dict(d) for d in r.get("features", [])]
+    # 旧项目文件里可能存着与 features 不符的文本：加载时按 features 校正
+    res.tbl_text = tbl_text_from(res.features, res.seq_id, res.tbl_text)
     res.issues = [Issue(i["level"], i["code"], i["message"]) for i in r["issues"]]
     prov = Provenance()
     for f, v in r["provenance"].items():

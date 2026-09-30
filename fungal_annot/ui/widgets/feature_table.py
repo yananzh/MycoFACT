@@ -24,6 +24,11 @@ def _mono_font():
 
 _COL_TYPES = ["Type", "Strand", "Coordinates", "Qualifiers"]
 
+# 行 → 迁移来源 Feature（经 UserRole 携带）：编辑器只暴露坐标/qualifier 文本，
+# 溯源（ref_key 与各区段参考坐标）必须随行保留，否则一次编辑就会让 validator
+# 失去回查参考的能力（密码表冲突检测、蛋白回检、identity 门禁随之静默消失）
+_ROW_SOURCE_ROLE = Qt.ItemDataRole.UserRole
+
 
 def _coords_text(feat: Feature) -> str:
     segs = []
@@ -142,6 +147,8 @@ class FeatureTable(QTableWidget):
             type_item = QTableWidgetItem(feat.ftype)
             type_item.setForeground(QColor(_TYPE_COLORS.get(feat.ftype, "#24292f")))
             type_item.setFont(_mono_font())
+            # 溯源随行携带：to_features() 据此归还 ref_key 与参考坐标
+            type_item.setData(_ROW_SOURCE_ROLE, feat)
             self.setItem(row, 0, type_item)
             self.setItem(row, 1, QTableWidgetItem(strand))
             self.setItem(row, 2, QTableWidgetItem(_coords_text(feat)))
@@ -191,10 +198,19 @@ class FeatureTable(QTableWidget):
         return None
 
     def to_features(self) -> list[Feature]:
+        """表格 → Feature 列表；**归还迁移溯源**（ref_key 与区段参考坐标）。
+
+        编辑器只让用户改坐标/qualifier，_ROW_SOURCE_ROLE 上留着该行的来源
+        Feature；缺了它，validator 就无法回查参考 CDS，编辑后密码表冲突检测、
+        蛋白回检与 identity 门禁会静默失效（历史缺陷）。
+        用户增删区段时按序还原能对上的前缀，对不上的保持 ref_start/ref_end=0
+        （validator 会就此给出 ref_context_missing 提示，而不是假装通过）。
+        """
         out = []
         for row in range(self.rowCount()):
+            type_item = self.item(row, 0)
             try:
-                ftype = self.item(row, 0).text().strip()
+                ftype = type_item.text().strip()
                 strand_text = self.item(row, 1).text().strip()
                 coords = self.item(row, 2).text()
                 quals = self.item(row, 3).text()
@@ -209,6 +225,12 @@ class FeatureTable(QTableWidget):
                 quals_d = parse_quals(quals)
             except ValueError as ex:
                 raise ValueError(f"Row {row + 1} ({ftype}): {ex}") from ex
+            src = type_item.data(_ROW_SOURCE_ROLE)
+            ref_key = None
+            if isinstance(src, Feature):
+                ref_key = src.ref_key
+                for new_p, old_p in zip(parts, src.parts, strict=False):
+                    new_p.ref_start, new_p.ref_end = old_p.ref_start, old_p.ref_end
             out.append(Feature(ftype=ftype, strand=1 if strand_text == "+" else -1,
-                               parts=parts, qualifiers=quals_d))
+                               parts=parts, qualifiers=quals_d, ref_key=ref_key))
         return out
