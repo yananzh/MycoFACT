@@ -14,7 +14,7 @@ from ..core.feature_transfer import transfer_features
 from ..core.gb_fetcher import GbFetchError, fetch_gb_text, parse_gb
 from ..core.models import Issue, Provenance, SeqInput
 from ..core.presets import detect_from_titles, get as get_preset
-from ..core.tbl_writer import write_fsa, write_report_csv, write_tbl
+from ..core.tbl_writer import write_combined_tbl, write_fsa, write_report_csv, write_tbl
 from ..core.validator import status_of, validate
 
 
@@ -97,6 +97,10 @@ def annotate_sequence(seq_input: SeqInput, cfg: PipelineConfig, hits=None,
         res.issues.append(Issue("warning", "preset_manual_confirm",
                                 f"{preset.name} is a mitochondrial/minor marker: few reference records, mostly auto-annotated;"
                                 "manual confirmation required"))
+    if seq_input.gene_type == "Generic":
+        # Generic 是自动判定的兜底标签而非用户选择：重试识别，使 presets.json
+        # 后续补充的基因（如 chs）对已标注序列生效，否则补预设只对新导入有效。
+        preset = None
 
     try:
         # ---- 1. 参考获取 ----
@@ -247,20 +251,25 @@ def _unique_path(out_dir: str, stem: str, ext: str, used: set[str]) -> str:
 def write_outputs(results: list[SeqResult], out_dir: str,
                   seq_inputs: list[SeqInput] | None = None,
                   with_fsa: bool = True, with_report: bool = True,
+                  with_combined: bool = True,
                   stems: list[str] | None = None) -> list[str]:
-    """写出 .tbl（每条序列一个）与可选的 .fsa / 验证报告 CSV，返回文件路径列表。
+    """写出 .tbl（每条序列一个）与可选的 .fsa / 验证报告 CSV / 多记录汇总
+    all_features.tbl，返回文件路径列表。
 
     stems 与 results 对齐的文件名主干覆盖（多参考对比导出未采纳 variant 时用
     "<seq_id>__<accession>"）；缺省取 _safe_stem(seq_id)。
 
     BankIt 门户模式（GB2sequin 同款工作流）：.tbl 只含 gene/CDS 等 feature，
     不含 source——organism 与来源修饰符在门户表单采集（§7.2 P1/P5）。
-    界面导出只要 .tbl（序列本身已在序列表、验证摘要已在审核页呈现）；
-    with_fsa / with_report 供 CLI 与测试保留完整产物。
+    汇总文件按 SeqResult 顺序拼接各序列的 >Feature 块（多记录格式，可整文件
+    提交 BankIt）；全部序列失败（tbl_text 为空）时不产出。界面导出只要
+    .tbl（序列本身已在序列表、验证摘要已在审核页呈现）；with_fsa / with_report
+    供 CLI 与测试保留完整产物。
     """
     os.makedirs(out_dir, exist_ok=True)
     written = []
     rows = []
+    combined_texts = []
     inputs = {s.seq_id: s for s in (seq_inputs or [])}
     used: set[str] = set()
     for i, r in enumerate(results):
@@ -276,11 +285,19 @@ def write_outputs(results: list[SeqResult], out_dir: str,
         with open(tbl, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(r.tbl_text)
         written.append(tbl)
+        if r.tbl_text:
+            combined_texts.append(r.tbl_text)
         if with_fsa:
             fsa = _unique_path(out_dir, stem, ".fsa", used)
             with open(fsa, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(r.fsa_text)
             written.append(fsa)
+    if with_combined and combined_texts:
+        # 走 _unique_path：序列名恰为 "all_features" 时汇总文件自动改名，不互相覆盖
+        combined = _unique_path(out_dir, "all_features", ".tbl", used)
+        with open(combined, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(write_combined_tbl(combined_texts))
+        written.append(combined)
     if with_report:
         report = os.path.join(out_dir, "validation_report.csv")
         with open(report, "w", encoding="utf-8", newline="\n") as fh:

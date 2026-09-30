@@ -45,6 +45,12 @@ def write_tbl(features, seq_id: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def write_combined_tbl(tbl_texts: list[str]) -> str:
+    """多记录 feature table：各序列的 >Feature 块顺序拼接成一个汇总文件，
+    BankIt 多记录提交可整文件上传。空文本（红灯失败序列）直接跳过。"""
+    return "".join(t if t.endswith("\n") else t + "\n" for t in tbl_texts)
+
+
 def write_fsa(seq_id: str, seq: str, wrap: int = 70) -> str:
     lines = [f">{seq_id}"]
     for i in range(0, len(seq), wrap):

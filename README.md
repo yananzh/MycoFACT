@@ -12,7 +12,7 @@ English | [简体中文](./README.zh-CN.md)
 **MycoFACT** (**F**ungal **F**eature **A**nnotation & **C**omparison **T**ool, package
 `fungal_annot`) uses "reference annotation transfer" to automatically generate NCBI
 five-column feature tables (.tbl) for fungal marker gene sequences (LSU/SSU/tef1/rpb1/rpb2/
-tub2/act/cal and mitochondrial markers), together with the paired .fsa files and a
+tub2/act/cal/chs and mitochondrial markers), together with the paired .fsa files and a
 validation report required for BankIt submission.
 
 ## ✨ Features
@@ -21,7 +21,7 @@ validation report required for BankIt submission.
   annotations of the reference GenBank record are transferred to the query sequences along
   the alignment coordinates, producing a five-column feature table (.tbl) in BankIt portal
   format (features such as gene/CDS only; organism info is entered in the BankIt portal form).
-- **Multi-gene presets**: built-in presets for LSU, SSU, tef1, rpb1, rpb2, tub2, act, cal
+- **Multi-gene presets**: built-in presets for LSU, SSU, tef1, rpb1, rpb2, tub2, act, cal, chs
   and mitochondrial markers; the gene type is auto-detected from BLAST hit titles or the
   reference annotation, falling back to a generic preset when unrecognized.
 - **Three ways to specify the reference**: online BLAST (requires network; NCBI requires an
@@ -75,7 +75,7 @@ sequences, or click **Example** to load the built-in demo demo/example.fasta; th
 advances automatically once the queue is drained) → reference selection (in-row single
 choice in the hit table, recommended row pre-selected) → annotation review (editable
 feature table, instant revalidation, alignment view, manual acknowledgment of red-flagged
-items) → validation summary and export (.tbl + .fsa + report).
+items) → validation summary and export (.tbl + .fsa + combined table + report).
 
 References are always resolved online (hit accession / direct download); the offline local
 GenBank mode remains available only via the CLI `--ref-gb` option.
@@ -107,6 +107,9 @@ python main.py presets
 ## 📤 Output
 
 - One `<SeqID>.tbl` (feature table) + one paired `<SeqID>.fsa` per sequence
+- `all_features.tbl` — summary feature table: every annotated record's
+  `>Feature` block in a single multi-record file, uploadable as a whole to
+  BankIt (omitted when no sequence produced features)
 - Overall validation report `validation_report.csv`
 
 ## ✅ Running Tests

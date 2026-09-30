@@ -886,7 +886,8 @@ def test_review_status_wording_and_confirm(window, ref_record_seq, ref_gb_text, 
 
 
 def test_export_page_writes_tbl_only(window, tmp_path, ref_record_seq, ref_gb_text, monkeypatch):
-    """P5 导出只写 .tbl（每条序列一个）：不再产生 .fsa 与验证报告 CSV。"""
+    """P5 导出只写 .tbl（每条序列一个 + 多记录汇总 all_features.tbl）：
+    不再产生 .fsa 与验证报告 CSV。"""
     from PyQt6.QtWidgets import QMessageBox
 
     from fungal_annot.core.models import SeqInput
@@ -908,9 +909,11 @@ def test_export_page_writes_tbl_only(window, tmp_path, ref_record_seq, ref_gb_te
     page._export()
 
     files = sorted(p.name for p in out.iterdir())
-    assert files == ["e1.tbl"], files
+    assert files == ["all_features.tbl", "e1.tbl"], files
     content = (out / "e1.tbl").read_text(encoding="utf-8")
     assert content.startswith(">Feature e1") and "CDS" in content
+    # 单序列：汇总文件与 per-seq .tbl 内容一致
+    assert (out / "all_features.tbl").read_text(encoding="utf-8") == content
     assert shown and "Export done" in shown[0]
 
 
@@ -1089,7 +1092,8 @@ def test_stop_cancels_remaining_blast_tasks(qtbot, window, monkeypatch):
     monkeypatch.setattr("fungal_annot.services.worker.run_blast", fake_run_blast)
 
     window.settings["email"] = "a@example.org"
-    for i in range(3):
+    window.blast_queue.set_max_threads(1)   # 本测试验证 STOP 的跳过语义，
+    for i in range(3):                      # 固定串行（默认并发池为 3，跳过时机不同）
         window.add_sequence(SeqInput(seq_id=f"c{i}", seq="ACGT" * 20, gene_type="tef1"))
     window.page_import.refresh()
     window.page_import._start()
@@ -1210,9 +1214,9 @@ def test_review_refresh_preserves_selection(window):
 
 def test_multi_reference_compare_adopt_and_export(qtbot, window, tmp_path,
                                                   ref_record_seq, ref_gb_text,
-                                                  partial_ref_gb, monkeypatch):
+                                                  monkeypatch):
     """端到端：同一序列对两个参考各注释一次 → 对比表两行 → 采纳第二个 →
-    导出只写采纳者（m1.tbl）。"""
+    导出只写采纳者（m1.tbl）+ 多记录汇总。"""
     from PyQt6.QtWidgets import QMessageBox
 
     from fungal_annot.core.models import SeqInput
@@ -1222,7 +1226,10 @@ def test_multi_reference_compare_adopt_and_export(qtbot, window, tmp_path,
                                  source_qualifiers={"organism": "F. t",
                                                     "country": "China"}))
     window.selected_refs["m1"] = ["REF00001.1", "REF00002.1"]
-    refs = {"REF00001.1": ref_gb_text, "REF00002.1": partial_ref_gb}
+    # 两个参考都必须覆盖整条查询，否则注释直接失败（比对裁端 → 红、空表）。
+    # 因此第二参考用同源记录改 accession，而非 partial_ref_gb（背景与查询不同源）。
+    alt_gb_text = ref_gb_text.replace("REF00001", "REF00002")
+    refs = {"REF00001.1": ref_gb_text, "REF00002.1": alt_gb_text}
     monkeypatch.setattr("fungal_annot.services.pipeline.fetch_gb_text",
                         lambda accession, **kw: (refs[accession], "full"))
 
@@ -1231,6 +1238,7 @@ def test_multi_reference_compare_adopt_and_export(qtbot, window, tmp_path,
     qtbot.waitUntil(lambda: window._annotate_pending <= 0, timeout=60000)
     variants = window.results["m1"]
     assert set(variants) == {"REF00001.1", "REF00002.1"}
+    assert all(v.tbl_text for v in variants.values())   # 两个参考都注释成功
     assert window.chosen_accession("m1") in variants  # 首个返回者默认采纳
 
     page = window.page_review
@@ -1245,7 +1253,7 @@ def test_multi_reference_compare_adopt_and_export(qtbot, window, tmp_path,
         next(r for r in range(page.variant_table.rowCount())
              if page.variant_table.item(r, 0).text() == other), 4).isChecked()
 
-    # 导出：默认只写采纳者（文件名仍为 <seq_id>.tbl，BankIt 就绪）
+    # 导出：默认只写采纳者（文件名仍为 <seq_id>.tbl，BankIt 就绪）+ 汇总文件
     monkeypatch.setattr(QMessageBox, "information",
                         staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
     window.confirmed["m1"] = True                     # 绕开红灯拦截（若有）
@@ -1254,7 +1262,11 @@ def test_multi_reference_compare_adopt_and_export(qtbot, window, tmp_path,
     out = tmp_path / "out"
     page_export.dir_edit.setText(str(out))
     page_export._export()
-    assert sorted(p.name for p in out.iterdir()) == ["m1.tbl"]
+    assert sorted(p.name for p in out.iterdir()) == ["all_features.tbl", "m1.tbl"]
+    # 导出的是采纳的 variant；汇总只含采纳者（单序列时与 m1.tbl 内容一致）
+    exported = (out / "m1.tbl").read_text(encoding="utf-8")
+    assert exported == variants[window.chosen_accession("m1")].tbl_text
+    assert (out / "all_features.tbl").read_text(encoding="utf-8") == exported
     assert window.exported is True
 
 
@@ -1296,3 +1308,24 @@ def test_annotate_pair_accounting(window):
                                  SeqResult(seq_id="p2", status="yellow"))
     assert window._annotate_pending == 0
     assert set(window.results["p2"]) == {"REF00001.1", "REF00002.1"}
+
+
+def test_blast_queue_concurrency_setting(window):
+    """Settings 项 blast_concurrency 驱动 BLAST 队列并发度：默认 3、夹取 1-4、
+    保存设置后即时生效（set_max_threads）。"""
+    assert window.blast_queue._pool.maxThreadCount() == 3      # 默认并发 3
+
+    window.blast_queue.set_max_threads(2)
+    assert window.blast_queue._pool.maxThreadCount() == 2
+
+    window.settings["blast_concurrency"] = "9"
+    assert window._blast_concurrency() == 4                    # 上限夹取
+    window.settings["blast_concurrency"] = "0"
+    assert window._blast_concurrency() == 1                    # 下限夹取
+    window.settings["blast_concurrency"] = "garbage"
+    assert window._blast_concurrency() == 3                    # 非法值回默认
+
+    window.settings["blast_concurrency"] = "4"
+    # 模拟 _open_settings 保存后的生效路径（不弹对话框）
+    window.blast_queue.set_max_threads(window._blast_concurrency())
+    assert window.blast_queue._pool.maxThreadCount() == 4

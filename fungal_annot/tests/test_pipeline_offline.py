@@ -56,6 +56,9 @@ def test_end_to_end_plus(ref_record_seq, ref_gb_text, tmp_path):
     assert (tmp_path / "user_seq.fsa").exists()
     assert (tmp_path / "user_seq.fsa").read_text(encoding="utf-8").startswith(">user_seq")
     assert (tmp_path / "validation_report.csv").exists()
+    # 多记录汇总：单序列时内容与 per-seq .tbl 一致
+    assert (tmp_path / "all_features.tbl").read_text(encoding="utf-8") == \
+        (tmp_path / "user_seq.tbl").read_text(encoding="utf-8")
     # 默认 = BankIt 门户模式：.tbl 只含 gene/CDS 等 feature，不含 source
     tbl_text = (tmp_path / "user_seq.tbl").read_text(encoding="utf-8")
     assert "\tsource" not in tbl_text and "organism" not in tbl_text
@@ -69,6 +72,11 @@ def test_detect_from_titles_word_boundary():
     ).name == "tef1"
     assert detect_from_titles(
         ["Alternaria alternata actin (ACT) gene, complete cds"]).name == "act"
+    assert detect_from_titles(
+        ["Aspergillus nidulans chitin synthase B (chsB) gene, partial cds"]).name == "chs"
+    # 词边界："chs" 单独成词才命中，"chs1"/"chsB" 需显式别名
+    assert detect_from_titles(
+        ["Candida albicans chitin synthase 3 (CHS3) mRNA, complete cds"]).name == "chs"
     # 词边界："extract"/"reaction" 不得命中 "act"
     assert detect_from_titles(
         ["Some random scaffold extract of a reaction protein"]) is None
@@ -103,6 +111,20 @@ def test_generic_fallback_when_gene_unrecognized(two_cds_gb):
     assert len(cds) == 1
     assert cds[0].qualifiers.get("transl_table") is None   # 输出不含 transl_table
     assert res.status in ("green", "yellow")
+
+
+def test_generic_tag_retries_detection_after_preset_added(partial_ref_gb):
+    """回归：曾落到 Generic 兜底的序列（gene_type 已固化为 "Generic"），在
+    presets.json 补充新基因后重新注释必须重试自动判定——Generic 是兜底标签
+    而非用户选择，否则补预设只对新导入的序列生效。"""
+    rec = SeqIO.read(io.StringIO(partial_ref_gb), "genbank")
+    q = str(rec.seq)[300:1150]
+    res = annotate_sequence(_mk(q, gene_type="Generic"), CFG,
+                            reference_gb_text=partial_ref_gb)
+    codes = {i.code: i for i in res.issues}
+    assert "gene_type_generic" not in codes
+    assert "gene_type_auto" in codes
+    assert "auto-detected as 'tef1'" in codes["gene_type_auto"].message
 
 
 def test_explicit_unknown_gene_type_still_errors(two_cds_gb):
@@ -234,6 +256,30 @@ def test_write_outputs_sanitises_windows_unsafe_seq_id(tmp_path):
     assert names == {"gi_123_ref_X.1.tbl", "gi_123_ref_X.1.fsa",
                      "chr1_100-200.tbl", "chr1_100-200.fsa",
                      "a_b.tbl", "a_b.fsa", "a_b_2.tbl", "a_b_2.fsa",
-                     "validation_report.csv"}
+                     "all_features.tbl", "validation_report.csv"}
     assert (tmp_path / "a_b.tbl").read_text(encoding="utf-8") == ">Feature a|b\n"
     assert (tmp_path / "a_b_2.tbl").read_text(encoding="utf-8") == ">Feature a:b\n"
+    # 汇总文件按原始 Seq ID 保留各 >Feature 记录头（>Feature 块顺序拼接）
+    combined = (tmp_path / "all_features.tbl").read_text(encoding="utf-8")
+    assert combined == (">Feature gi|123|ref|X.1\n>Feature chr1:100-200\n"
+                        ">Feature a|b\n>Feature a:b\n")
+
+
+def test_write_outputs_combined_summary_skips_failed(tmp_path):
+    """汇总 all_features.tbl：多记录块按序拼接；失败序列（tbl_text 为空）
+    跳过其记录但 per-seq 空文件照常写出；全部失败时不产出汇总。"""
+    res1 = SeqResult(seq_id="s1", tbl_text=">Feature s1\n1\t100\tgene\n")
+    res2 = SeqResult(seq_id="s2", tbl_text=">Feature s2\n1\t80\tgene\n")
+    failed = SeqResult(seq_id="s3")                 # 管线失败：tbl_text 为空
+    written = write_outputs([res1, failed, res2], str(tmp_path), with_fsa=False)
+    combined = tmp_path / "all_features.tbl"
+    assert combined.read_text(encoding="utf-8") == \
+        ">Feature s1\n1\t100\tgene\n>Feature s2\n1\t80\tgene\n"
+    assert {os.path.basename(p) for p in written} == \
+        {"s1.tbl", "s2.tbl", "s3.tbl", "all_features.tbl", "validation_report.csv"}
+
+    all_failed = write_outputs([SeqResult(seq_id="s4")], str(tmp_path / "out2"),
+                               with_fsa=False)
+    assert not (tmp_path / "out2" / "all_features.tbl").exists()
+    assert {os.path.basename(p) for p in all_failed} == \
+        {"s4.tbl", "validation_report.csv"}

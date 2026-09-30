@@ -28,7 +28,8 @@ def main(argv=None) -> int:
                     "(reference annotation transfer)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    r = sub.add_parser("run", help="FASTA -> annotation transfer -> .tbl/.fsa + validation report")
+    r = sub.add_parser("run", help="FASTA -> annotation transfer -> .tbl/.fsa + combined "
+                                  "all_features.tbl + validation report")
     r.add_argument("--input", required=True, help="input FASTA (one or more sequences)")
     r.add_argument("--out", required=True, help="output directory")
     r.add_argument("--gene-type", default="",

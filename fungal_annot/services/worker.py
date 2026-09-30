@@ -1,8 +1,9 @@
 """后台任务封装（§7.3）：QThreadPool + QRunnable + 信号驱动 UI。
 
-BLAST/下载限速：QThreadPool maxThreadCount=1 串行执行队列（§6.1 限速队列）。
-单条 BLAST 进行中无法中断（NCBIWWW 阻塞调用）；STOP 后尚未开始的任务在 run()
-入口被跳过（skipped 信号），进行中的一条做完即排空。
+BLAST 并发池：maxThreadCount 默认 3（Settings 可调 1-4），跨线程的提交
+间隔由 blast_runner 的共享节流器保证 ≥10 s（§6.1 限速）；注释队列小并发。
+单条 BLAST 进行中无法中断（NCBIWWW 阻塞调用）；STOP 后尚未开始的任务在
+run() 入口被跳过（skipped 信号），进行中的一条做完即排空。
 
 信号带批次代次号（gen）：项目丢弃（New/Open/Clear）会作废旧批次，迟到的
 finished/failed 由 UI 按代次号丢弃，不会写进新项目数据。
@@ -105,7 +106,8 @@ class BlastWorker(_QueueWorker):
                 self._skip()
                 return
             self.signals.log.emit(f"[{self.seq.seq_id}] Online BLAST running "
-                                  "(~1-5 min per sequence, rate-limited serial queue)...")
+                                  "(~1-5 min per sequence, parallel pool with "
+                                  "submission throttling)...")
             hits = run_blast(self.seq.seq, blast_db=self.cfg.blast_db,
                              organism=self.cfg.organism_filter,
                              hitlist_size=self.cfg.hitlist_size)
@@ -122,9 +124,10 @@ class BlastWorker(_QueueWorker):
 
 
 class TaskQueue:
-    """页面持有的任务队列：串行（限速）或小并发，支持 STOP 跳过剩余任务。
+    """页面持有的任务队列：限速小并发（BLAST 默认 3 线程，提交间隔由
+    blast_runner 的共享节流器保证），支持 STOP 跳过剩余任务。
 
-    cancel() 后：进行中的一条无法中断（NCBIWWW 阻塞调用），做完照常计数；
+    cancel() 后：进行中的任务无法中断（NCBIWWW 阻塞调用），做完照常计数；
     尚未开始的任务在 run() 入口检查 cancel_requested / 代次号后跳过（skipped），
     由 UI 走与失败相同的排空路径。invalidate() 额外推进代次号，用于项目丢弃时
     作废全部在途回调（含执行中那条的迟到结果）。
@@ -137,6 +140,10 @@ class TaskQueue:
         self._pool.setMaxThreadCount(max_threads)
         self._signals = WorkerSignals()
         self._refs: list = []
+
+    def set_max_threads(self, n: int):
+        """运行中调整并发度（QThreadPool 允许随时改；在跑的任务不受影响）。"""
+        self._pool.setMaxThreadCount(max(1, int(n)))
 
     @property
     def signals(self) -> WorkerSignals:

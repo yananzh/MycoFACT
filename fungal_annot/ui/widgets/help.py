@@ -161,8 +161,8 @@ PAGE_HELP = {
 <b>drag &amp; drop</b> files onto it, or use <b>Browse</b>. No sequences at hand?
 <b>Example</b> loads four demo sequences.</li>
 <li><b>Press BLAST.</b> The box content is imported (duplicate IDs rejected) and
-searched serially, ~1-5 min per sequence. When the queue drains, the app moves
-to step 2 on its own.</li>
+searched in a small parallel pool (submission rate-limited), ~1-5 min per
+sequence. When the queue drains, the app moves to step 2 on its own.</li>
 <li><b>Manage the list:</b> <b>double-click a Seq ID to rename</b> (hits, results
 and confirmations follow); <b>✕</b> removes a sequence; <b>STOP</b> cancels the
 remaining queue.</li>
@@ -176,6 +176,11 @@ remaining queue.</li>
     ("Marker", "Which locus the sequence is (tef1, act, LSU, ...) - auto-detected "
                "from BLAST titles; decides which features are transferred and the "
                "genetic code."),
+    ("Ident %", "Identity of the <b>best BLAST local match (HSP)</b>: same bases "
+                "/ that stretch's length, gaps included. The stretch may be "
+                "shorter than your sequence (coverage is the separate Cover %) - "
+                "it ranks candidate references. Step 3 recomputes a full-length "
+                "value, so the two numbers can differ."),
     ("NCBI email", "Required for online BLAST - set it in menu ▸ Settings."),
     ("BLAST state", f"<code>-</code> queued · <span style='color:{YELLOW}'>running…"
                     f"</span> searching · <span style='color:{GREEN}'>done</span> "
@@ -274,6 +279,12 @@ for green.</li>
 
 <h3>Terms</h3>
 {_terms_table((
+    ("Identity", "Whole-query identity vs the chosen reference, <b>recomputed by "
+                 "the app</b> (Smith-Waterman, strand auto-detected) right before "
+                 "annotation transfer: same bases / aligned positions, gaps "
+                 "excluded. Compared with the identity threshold - and not "
+                 "identical with step 1's Ident % (local HSP, gaps included), so "
+                 "the two numbers need not match."),
     ("Partial (&lt;1 / &gt;520)", "Ends cut by the primers - normal for amplicons."),
     ("codon_start", "First complete codon in a 5'-partial CDS (1/2/3) - derived "
                     "automatically."),
@@ -304,13 +315,14 @@ for green.</li>
     "page_export": ("How to use: Export Results", f"""
 <h3>What this page does</h3>
 <p>Write one <b>five-column .tbl</b> (BankIt format) per sequence, from the
-variant adopted in step 3.</p>
+variant adopted in step 3, plus a summary <code>all_features.tbl</code>
+concatenating every record.</p>
 
 <h3>How to use</h3>
 <ol>
 <li><b>Set the output directory</b> and press <b>Export Feature Table</b> - one
-<code>&lt;SeqID&gt;.tbl</code> per annotated sequence (overwrites existing
-files).</li>
+<code>&lt;SeqID&gt;.tbl</code> per annotated sequence plus the combined
+<code>all_features.tbl</code> (overwrites existing files).</li>
 <li><b>Open output folder</b> shows the results in Explorer.</li>
 <li>Unconfirmed red sequences block the export - confirm them on step 3.</li>
 </ol>
@@ -318,7 +330,8 @@ files).</li>
 <h3>What's next (BankIt)</h3>
 <ul>
 <li>Start a nucleotide submission in the NCBI <b>BankIt</b> portal; upload the
-.tbl files <b>and your original FASTA</b>.</li>
+.tbl files <b>and your original FASTA</b> - for a multi-sequence submission the
+combined <code>all_features.tbl</code> can replace the per-sequence files.</li>
 <li>Organism and source modifiers (isolate, country, collection date, ...) are
 collected by the portal - deliberately not part of the .tbl.</li>
 </ul>
@@ -327,6 +340,9 @@ collected by the portal - deliberately not part of the .tbl.</li>
 {_terms_table((
     (".tbl", "Five-column feature table (start, stop, feature key, qualifiers) - "
              "features only, no sequence."),
+    ("all_features.tbl", "Summary feature table: every sequence's &gt;Feature "
+                         "record in one file, ready for a multi-record BankIt "
+                         "submission."),
     ("BankIt portal", "NCBI's web submission wizard; pairs the .tbl with your "
                       "FASTA and adds the source information."),
     ("Adopted variant", "The result ticked in Use on step 3 - the one exported."),
@@ -411,7 +427,9 @@ HELP = {
     "identity": ("identity threshold",
                  "<p>The <b>nucleotide identity</b> between your sequence and the chosen "
                  "reference must be above this threshold (default 97%) before annotation "
-                 "is transferred without a red flag.</p>"
+                 "is transferred without a red flag - this is the whole-query value "
+                 "recomputed on step 3 (the Identity column there), not the step-1 "
+                 "BLAST Ident %.</p>"
                  "<p>Below the threshold the sequence is flagged " + _status_chip("red")
                  + " on step 3: a distant reference may have misplaced exon boundaries, "
                    "so a human should confirm the choice.</p>"
@@ -468,11 +486,13 @@ BankIt expects - one file per sequence.</p>
 <p style="margin-top:8px;">{_note("Steps unlock in order - hover a locked step for the reason; click any unlocked step to jump.")}</p>
 
 <h3>Settings</h3>
-<p>Three settings - everything else runs on sensible defaults:</p>
+<p>Four settings - everything else runs on sensible defaults:</p>
 <ul>
 <li><b>NCBI contact email</b> - required for the online BLAST.</li>
 <li><b>identity threshold (97%)</b> - below it a sequence is flagged red.</li>
 <li><b>References compared per sequence (1-5)</b> - pre-checked on step 2.</li>
+<li><b>Concurrent BLAST submissions (1-4)</b> - parallel jobs speed up batches;
+submissions stay rate-limited.</li>
 </ul>
 
 <h3>Review status at a glance</h3>

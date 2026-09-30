@@ -10,7 +10,7 @@
 [![Build](https://github.com/yananzh/MycoFACT/actions/workflows/build.yml/badge.svg)](https://github.com/yananzh/MycoFACT/actions/workflows/build.yml)
 
 **MycoFACT**（**F**ungal **F**eature **A**nnotation & **C**omparison **T**ool，包名
-`fungal_annot`）通过"参考注释迁移"为真菌 marker 基因序列（LSU/SSU/tef1/rpb1/rpb2/tub2/act/cal
+`fungal_annot`）通过"参考注释迁移"为真菌 marker 基因序列（LSU/SSU/tef1/rpb1/rpb2/tub2/act/cal/chs
 及线粒体 marker）自动生成 NCBI 五列 feature table（.tbl），并配套输出 BankIt 提交所需的
 .fsa 文件与验证报告。
 
@@ -19,7 +19,7 @@
 - **参考注释迁移**：BLAST 选定参考序列后，将参考 GenBank 的注释按比对坐标迁移到查询序列，
   自动生成 BankIt 门户格式的五列 feature table（.tbl，只含 gene/CDS 等 feature，
   organism 在 BankIt 门户表单录入）。
-- **多基因预设**：内置 LSU、SSU、tef1、rpb1、rpb2、tub2、act、cal 及线粒体 marker 等基因预设；
+- **多基因预设**：内置 LSU、SSU、tef1、rpb1、rpb2、tub2、act、cal、chs 及线粒体 marker 等基因预设；
   可自动从命中标题 / 参考注释识别基因类型，无法识别时回退通用 Generic 预设。
 - **三种指定参考的方式**：在线 BLAST 选参考（需联网，NCBI 要求提供 email）、本地参考
   GenBank 离线模式、直接指定 accession 跳过 BLAST。
@@ -62,7 +62,7 @@ python main.py        # 启动 GUI
 四步流程：序列导入并跑 BLAST（拖入 / 浏览 / 粘贴 FASTA 或裸序列，或点 **Example** 载入
 内置示例 demo/example.fasta；队列排空后自动进入下一步）→ 参考选择（命中表行内单选，
 默认推荐行）→ 注释审核（可编辑 feature 表格、即时重验、比对视图、红灯人工
-确认）→ 验证汇总与导出（.tbl + .fsa + 报告）。
+确认）→ 验证汇总与导出（.tbl + .fsa + 汇总表 + 报告）。
 
 参考统一在线解析（命中 accession / 直接下载）；本地参考 GenBank 离线模式仅 CLI
 `--ref-gb` 保留。
@@ -92,6 +92,8 @@ python main.py presets
 ## 📤 输出
 
 - 每条序列一个 `<SeqID>.tbl`（feature table）+ 配对 `<SeqID>.fsa`
+- `all_features.tbl`——汇总 feature table：所有已注释序列的 `>Feature` 记录合并
+  为一个多记录文件，可整文件上传 BankIt（无任何序列产出 feature 时不生成）
 - 总体验证报告 `validation_report.csv`
 
 ## ✅ 运行测试

@@ -153,6 +153,35 @@
       "calmodulin"
     ]
   },
+  "chs": {
+    "kind": "CDS",
+    "transl_table": 1,
+    "feature_types": [
+      "gene",
+      "CDS",
+      "intron",
+      "exon"
+    ],
+    "aliases": [
+      "CHS",
+      "chitin synthase",
+      "CHS1",
+      "CHS2",
+      "CHS3",
+      "CHS4",
+      "CHS5",
+      "CHS6",
+      "CHS7",
+      "CHS8",
+      "chsA",
+      "chsB",
+      "chsC",
+      "chsD",
+      "chsE",
+      "chsF",
+      "chsG"
+    ]
+  },
   "cox1": {
     "kind": "CDS",
     "mito": true,

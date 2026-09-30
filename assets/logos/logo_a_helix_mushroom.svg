@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- 方案 A：菌盖螺旋 —— 蘑菇 + DNA 螺旋茎，应用图标风格 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4290e2"/>
+      <stop offset="1" stop-color="#1b5a9c"/>
+    </linearGradient>
+    <linearGradient id="cap" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d3e5f9"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <g transform="translate(0,-52)">
+    <!-- 菌盖 -->
+    <path d="M 112 250 C 130 136 382 136 400 250 C 334 278 178 278 112 250 Z" fill="url(#cap)"/>
+    <path d="M 188 190 C 210 176 240 170 266 176" stroke="#ffffff" stroke-width="12"
+          stroke-linecap="round" fill="none" opacity="0.7"/>
+    <!-- DNA 螺旋菌柄 -->
+    <g stroke="#ffffff" stroke-width="15" fill="none" stroke-linecap="round">
+      <path d="M 228 296 C 228 334 288 352 288 390 C 288 424 240 440 240 460"/>
+      <path d="M 288 296 C 288 334 228 352 228 390 C 228 424 276 440 276 460"/>
+    </g>
+    <g stroke="#ffffff" stroke-width="9" stroke-linecap="round" opacity="0.95">
+      <line x1="240" y1="320" x2="276" y2="320"/>
+      <line x1="238" y1="414" x2="278" y2="414"/>
+      <line x1="243" y1="450" x2="273" y2="450"/>
+    </g>
+    <!-- 孢子 -->
+    <circle cx="402" cy="190" r="9" fill="#ffffff" opacity="0.85"/>
+    <circle cx="426" cy="158" r="6" fill="#ffffff" opacity="0.6"/>
+    <circle cx="396" cy="136" r="5" fill="#ffffff" opacity="0.5"/>
+  </g>
+</svg>

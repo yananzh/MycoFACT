@@ -1,7 +1,7 @@
 """§6.7 五列表格式测试：join 多段 / 互补链降序 / partial 标记 / .fsa 配对 / 报告列。"""
 from fungal_annot.core.models import Feature, FeaturePart
-from fungal_annot.core.tbl_writer import (REPORT_COLUMNS, feature_lines, write_fsa,
-                                          write_report_csv, write_tbl)
+from fungal_annot.core.tbl_writer import (REPORT_COLUMNS, feature_lines, write_combined_tbl,
+                                          write_fsa, write_report_csv, write_tbl)
 
 
 def _plus_cds():
@@ -51,6 +51,17 @@ def test_fsa_pairing():
     assert lines[0] == ">seq1"
     assert len(lines[1]) == 70 and len(lines[2]) == 30
     assert "".join(lines[1:]) == seq
+
+
+def test_combined_tbl_multi_record():
+    """汇总多记录格式：各 >Feature 块顺序拼接；缺尾换行的块自动补齐，
+    不与下一记录头粘连。"""
+    t1 = write_tbl([_plus_cds()], "seq1")
+    t2 = write_tbl([], "seq2")
+    assert write_combined_tbl([t1, t2]) == t1 + t2
+    assert write_combined_tbl([">Feature a\n1\t2\tgene", ">Feature b\n"]) == \
+        ">Feature a\n1\t2\tgene\n>Feature b\n"
+    assert write_combined_tbl([]) == ""
 
 
 def test_report_has_provenance_columns():

@@ -5,7 +5,8 @@ Settings / Guide / About 三个直接动作（点击即执行，无下拉子菜�
 
 状态中枢：sequences / hits / selected_refs / results / chosen_ref / confirmed 由本对象持有，
 各页面通过 win 引用读写。results[seq_id] = {参考accession → SeqResult}（多参考对比，
-2026-09-29）；BLAST 队列串行（限速），注释队列小并发、按（序列 × 参考）成对提交。
+2026-09-29）；BLAST 队列小并发（默认 3，全局提交间隔由共享节流器限速 ≥10 s），
+注释队列小并发、按（序列 × 参考）成对提交。
 """
 import os
 
@@ -43,12 +44,17 @@ class SettingsDialog(QDialog):
         self.edits = {}
         fields = [("email", "NCBI contact email (required)"),
                   ("identity_threshold", "identity threshold %"),
-                  ("default_refs", "References compared per sequence (1-5)")]
+                  ("default_refs", "References compared per sequence (1-5)"),
+                  ("blast_concurrency", "Concurrent BLAST submissions (1-4)")]
         # 与 make_config 的兜底默认值保持一致（identity_threshold 空白会被误读为未设置）
-        defaults = {"identity_threshold": "97", "default_refs": "3"}
+        defaults = {"identity_threshold": "97", "default_refs": "3",
+                    "blast_concurrency": "3"}
         hints = {"email": "NCBI uses this to contact you about the submission.",
                  "identity_threshold": "Below this identity a sequence is "
-                                       "flagged RED for manual review."}
+                                       "flagged RED for manual review.",
+                 "blast_concurrency": "How many BLAST jobs run in parallel; "
+                                      "submissions stay rate-limited (>=10 s "
+                                      "apart). Higher risks NCBI throttling."}
         for key, label in fields:
             edit = QLineEdit(str(settings.get(key) or defaults.get(key, "")))
             self.edits[key] = edit
@@ -63,7 +69,7 @@ class SettingsDialog(QDialog):
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         form.addRow(bb)
-        # 三行表单无需大弹窗：直接贴 sizeHint（不得再手动放大）
+        # 四行表单无需大弹窗：直接贴 sizeHint（不得再手动放大）
         self.resize(self.sizeHint())
 
     def values(self) -> dict:
@@ -103,7 +109,8 @@ class MainWindow(QMainWindow):
         self.exported = False
 
         # ---- 任务队列 ----
-        self.blast_queue = TaskQueue(max_threads=1)     # 限速串行（§6.1）
+        self.blast_queue = TaskQueue(max_threads=self._blast_concurrency())
+        # 并发提交池：线程内各自跑完整 BLAST，全局提交间隔由共享节流器保证（§6.1）
         self.annotate_queue = TaskQueue(max_threads=2)
         self._blast_pending = 0
         self._annotate_pending = 0
@@ -365,6 +372,14 @@ class MainWindow(QMainWindow):
         self.update_summary()
 
     # ---- 配置 ----
+    def _blast_concurrency(self) -> int:
+        """BLAST 并发提交数（Settings 项 blast_concurrency，夹在 1-4，默认 3）。"""
+        try:
+            n = int(self.settings.get("blast_concurrency", 3) or 3)
+        except (TypeError, ValueError):
+            n = 3
+        return min(4, max(1, n))
+
     def make_config(self) -> PipelineConfig:
         st = self.settings
         try:
@@ -527,6 +542,7 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.settings = dlg.values()
             save_settings(self.settings)
+            self.blast_queue.set_max_threads(self._blast_concurrency())
             self.page_import.refresh()
             self.log("Settings saved.")
 

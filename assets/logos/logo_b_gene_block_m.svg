@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- 方案 B：基因块 M —— 字母 M + 五列 feature table 色块 + 验证对勾 -->
+  <defs>
+    <linearGradient id="bm" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3e8ee0"/>
+      <stop offset="1" stop-color="#1b5a9c"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="#ffffff"
+        stroke="#d8e2ec" stroke-width="5"/>
+  <!-- 字母 M -->
+  <path d="M 154 380 L 154 158 L 256 312 L 358 158 L 358 380" fill="none"
+        stroke="url(#bm)" stroke-width="56" stroke-linejoin="round"
+        stroke-linecap="round"/>
+  <!-- 顶点验证对勾（对应审核绿灯） -->
+  <circle cx="256" cy="312" r="30" fill="#1a7f37"/>
+  <path d="M 242 312 l 10 11 l 20 -23" fill="none" stroke="#ffffff"
+        stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 五列 feature table 色块 -->
+  <g>
+    <rect x="154" y="424" width="28" height="22" rx="7" fill="#6aa7e8"/>
+    <rect x="188" y="424" width="46" height="22" rx="7" fill="#2d7dd2"/>
+    <rect x="240" y="424" width="32" height="22" rx="7" fill="#1b5a9c"/>
+    <rect x="278" y="424" width="52" height="22" rx="7" fill="#1a7f37"/>
+    <rect x="336" y="424" width="24" height="22" rx="7" fill="#8fb3d9"/>
+  </g>
+</svg>

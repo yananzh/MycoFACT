@@ -1,6 +1,7 @@
 """P5 导出页（§7.2 + 多参考对比）：汇总表、输出目录、导出（红灯未确认拦截）。
 
-每序列一个 .tbl，取其采纳（Adopted）的 variant，直接可提交 BankIt。
+每序列一个 .tbl，取其采纳（Adopted）的 variant，另加多记录汇总
+all_features.tbl（全部序列的 >Feature 块合并，可整文件提交 BankIt）。
 
 BankIt 门户模式：导出只写 .tbl（每条序列一个，含 gene/CDS 等 feature）；
 organism 等来源信息在门户表单录入，因此 table2asn 预检不适用，已移除。
@@ -55,7 +56,8 @@ class PageExport(QWidget):
         btns = QHBoxLayout()
         self.b_export = QPushButton("Export Feature Table")
         self.b_export.setObjectName("PrimaryButton")
-        self.b_export.setToolTip("Write one five-column .tbl file per sequence")
+        self.b_export.setToolTip("Write one five-column .tbl file per sequence, "
+                                 "plus a combined all_features.tbl with all records")
         self.b_export.clicked.connect(self._export)
         b_open = QPushButton("Open output folder")
         b_open.clicked.connect(self._open_folder)

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- 方案 C：比对读阵 —— 实心伞盖分鳃条（似比对条带），嵌 feature 色块，标尺刻度菌柄 -->
+  <defs>
+    <linearGradient id="ring" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3e8ee0"/>
+      <stop offset="1" stop-color="#1b5a9c"/>
+    </linearGradient>
+  </defs>
+  <circle cx="256" cy="256" r="230" fill="#f4f9ff" stroke="url(#ring)" stroke-width="12"/>
+  <g transform="translate(0,-20)">
+    <!-- 伞盖 -->
+    <path d="M 96 258 C 112 118 400 118 416 258 C 348 294 164 294 96 258 Z" fill="#7db3ea"/>
+    <!-- feature 色块（嵌在鳃条之间） -->
+    <rect x="300" y="200" width="78" height="24" rx="10" fill="#1a7f37"/>
+    <rect x="150" y="240" width="62" height="16" rx="8" fill="#9a6700"/>
+    <rect x="180" y="266" width="150" height="14" rx="7" fill="#1b5a9c"/>
+    <!-- 鳃线（背景色沟槽，把伞盖分成比对条带） -->
+    <g stroke="#f4f9ff" stroke-width="8" stroke-linecap="round">
+      <line x1="128" y1="195" x2="384" y2="195"/>
+      <line x1="104" y1="232" x2="408" y2="232"/>
+      <line x1="102" y1="258" x2="410" y2="258"/>
+    </g>
+    <!-- 标尺刻度菌柄 -->
+    <rect x="240" y="300" width="32" height="106" rx="15" fill="#dbeafe"
+          stroke="#2d7dd2" stroke-width="4"/>
+    <g stroke="#57606a" stroke-width="5" stroke-linecap="round">
+      <line x1="220" y1="316" x2="240" y2="316"/>
+      <line x1="220" y1="350" x2="240" y2="350"/>
+      <line x1="220" y1="384" x2="240" y2="384"/>
+    </g>
+  </g>
+</svg>

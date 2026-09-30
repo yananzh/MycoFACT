@@ -3,8 +3,8 @@
 排序规则：qcovs==100 优先 → 注释完整度（title 线索）→ 模式菌株/培养物记录 →
 pident 降序。RefSeq 仅对 rRNA 类预设加分（蛋白编码 marker 无 RefSeq 覆盖）。
 """
-import random
 import re
+import threading
 import time
 from io import StringIO
 
@@ -23,20 +23,49 @@ class BlastError(Exception):
     pass
 
 
+class _SubmitThrottle:
+    """全局共享的 BLAST 提交节流：并发池下相邻两次提交仍间隔 ≥ min_interval。
+
+    NCBI URL API 礼仪：提交间隔 ≥ ~10 s（状态轮询由 Biopython 内部控制）。
+    gb_fetcher.Throttle 无锁（Entrez 本就串行调用）；这里的 wait() 会被多个
+    工作线程同时调用，用锁保证排队线程拿到互相错开的提交时刻。
+    """
+
+    def __init__(self, min_interval: float):
+        self.min_interval = min_interval
+        self._last = 0.0
+        self._lock = threading.Lock()
+
+    def wait(self, min_interval: float | None = None):
+        with self._lock:
+            if min_interval is not None:
+                self.min_interval = min_interval
+            dt = time.monotonic() - self._last
+            if dt < self.min_interval:
+                time.sleep(self.min_interval - dt)
+            self._last = time.monotonic()
+
+
+SUBMIT_SPACING = 10.0            # NCBI URL API：提交间隔 ≥ ~10 s
+_submit_throttle = _SubmitThrottle(SUBMIT_SPACING)
+
+
 def run_blast(seq: str, blast_db: str = "core_nt", organism: str = "",
               hitlist_size: int = 50, retries: int = 3,
-              submit_interval: float = 3.0) -> list[BlastHit]:
+              submit_interval: float = SUBMIT_SPACING) -> list[BlastHit]:
     """提交在线 BLAST 并解析。organism 非 0 时作为 Entrez query 限定命中范围。
 
-    NCBI URL API 单条通常 1–5 分钟；两次提交间隔 ≥ submit_interval（限速队列）。
-    默认库为 core_nt（NCBI 已将 nt 并入 core_nt，API 层目前仍接受 nt 别名）；
-    库名为空时回退默认——空 DATABASE 会被 NCBI 以 Message ID#56 拒绝。
+    NCBI URL API 单条通常 1–5 分钟；submit_interval 是**全局**相邻提交的
+    最小间隔（由共享节流器执行）——并发池同时跑多条时，提交时刻仍互相
+    错开。默认库为 core_nt（NCBI 已将 nt 并入 core_nt，API 层目前仍接受
+    nt 别名）；库名为空时回退默认——空 DATABASE 会被 NCBI 以 Message
+    ID#56 拒绝。
     """
     blast_db = (blast_db or "").strip() or "core_nt"
     last_ex = None
     for attempt in range(retries):
         try:
-            time.sleep(submit_interval + random.uniform(0, 1.0))
+            _submit_throttle.wait(submit_interval)
             kwargs = {"hitlist_size": hitlist_size}
             if organism.strip():
                 kwargs["entrez_query"] = organism.strip()
