@@ -34,8 +34,9 @@ markers (mtLSU, mtSSU, cox1, cob, nad1/nad2/nad4/nad5, atp6, rps3).
 3. **Annotation review** — the transferred feature table is editable; every edit is
    revalidated instantly, an alignment view assists checking, and red-flagged items must
    be manually acknowledged.
-4. **Validation & export** — .tbl + .fsa per sequence, a combined feature table, and an
-   overall validation report.
+4. **Validation & export** — a five-column feature table per sequence plus a combined
+   multi-record feature table (GUI writes `.tbl` only; the CLI additionally emits paired
+   `.fsa` files and a validation report CSV).
 
 A horizontal step bar at the top of the window lets you jump to any unlocked step, and
 projects can be saved (JSON) and resumed at any time. BLAST and parsing run in background
@@ -86,7 +87,9 @@ python main.py
 ```
 
 This opens the four-step wizard described above. Click **Example** on the first page to
-load the built-in demo (`demo/example.fasta`) and walk through the whole flow offline.
+load the built-in demo (`demo/example.fasta`) and explore the wizard; annotation itself
+requires online BLAST or a reference accession (fully offline runs are CLI only, via
+`--ref-gb`).
 
 ### Command line
 
@@ -148,8 +151,9 @@ MycoFACT/
 ## Status
 
 - **Core + CLI + tests** (M0–M2) and the **PyQt6 wizard UI** (M3–M5: background thread
-  queue, project JSON persistence, instant revalidation of review edits, in-app table2asn
-  preflight entry) are complete.
+  queue, project JSON persistence, instant revalidation of review edits) are complete.
+  (The previously announced in-app table2asn preflight entry was dropped: organism info
+  is entered in the BankIt portal form, so a preflight pass does not apply.)
 - **To do**: online BLAST validation against the live NCBI service (a gold-standard set
   of real lab sequences is recommended), a table2asn CI gate (requires a BankIt template
   .sbt), and Windows code signing / macOS notarization.
