@@ -276,8 +276,12 @@ per reference. Click a row to inspect it; tick the <b>Use</b> radio to adopt it
 for export.</li>
 <li><b>Edit cells directly</b> - Type, Strand, Coordinates, Qualifiers.
 Re-validation runs ~0.6 s after you stop typing.</li>
-<li><b>Add feature</b> / <b>Delete row</b> manage rows (the source row is
-protected); <b>View alignment</b> checks exon boundaries against the reference.</li>
+<li><b>View alignment</b> checks exon boundaries against the reference - for a
+translatable CDS it also shows the reference-vs-query <b>protein alignment</b>
+(same pairing and genetic code as the protein back-check);
+<b>View reference features</b> shows the reference's own five-column table.
+Rows are not added or deleted here - fine-tune the exported .tbl directly if
+needed.</li>
 <li>Red sequences cannot be exported right away - the <b>export page asks you
 to confirm them knowingly</b> when you press Export.</li>
 </ol>
@@ -331,7 +335,8 @@ concatenating every record.</p>
 <code>all_features.tbl</code> (overwrites existing files).</li>
 <li><b>Open output folder</b> shows the results in Explorer.</li>
 <li>Red sequences ask for confirmation at export - review their issues on
-step 3 first, then accept the dialog only knowingly.</li>
+step 3 first, then accept the dialog only knowingly. Accepted reds show
+<b>Red · confirmed</b> in the Status column and won't be asked again.</li>
 </ol>
 
 <h3>What's next (BankIt)</h3>
@@ -353,7 +358,6 @@ collected by the portal - deliberately not part of the .tbl.</li>
     ("BankIt portal", "NCBI's web submission wizard; pairs the .tbl with your "
                       "FASTA and adds the source information."),
     ("Adopted variant", "The result ticked in Use on step 3 - the one exported."),
-    ("Confirmed", "Yes = red status knowingly accepted on step 3."),
 ))}
 
 <h3>Tips</h3>
@@ -364,7 +368,10 @@ tables.</li>
 
 <h3>Common problems</h3>
 {_fix_table((
-    ("Export blocked", "Red sequences lack confirmation - confirm them on step 3."),
+    ("Export asks to confirm red ones", "Unfixed red sequences trigger a "
+                                        "knowingly-accept dialog at export; "
+                                        "decline it, review the issues on step 3, "
+                                        "then export again."),
     ("Could not write to '&lt;dir&gt;'", "Invalid or read-only directory - pick "
                                          "another one."),
     ("Nothing to export yet", "Annotate sequences in steps 1-3 first."),
@@ -471,7 +478,7 @@ _APP_STEPS = _table(
       "An adopted annotation per sequence"),
      (_chip("4", "#ffffff", ACCENT), "<b>Export Results</b>",
       "Pick a folder, press <b>Export Feature Table</b>",
-      "&lt;SeqID&gt;.tbl files for BankIt")),
+      "&lt;SeqID&gt;.tbl files + combined all_features.tbl for BankIt")),
     widths=(70, 150, 220, 200))
 
 _APP_STATUS = _table(
@@ -486,7 +493,8 @@ APP_GUIDE = ("User Guide", f"""
 <h3>What this tool does</h3>
 <p>For each fungal marker amplicon, find a close reference on NCBI, transfer its
 annotation, review and fix it, and export the <b>five-column .tbl</b> that NCBI
-BankIt expects - one file per sequence.</p>
+BankIt expects - one file per sequence, plus a combined
+<code>all_features.tbl</code>.</p>
 
 <h3>Before you start: check the Sanger traces</h3>
 {_note("Open each chromatogram (.ab1) in a trace viewer such as <b>SnapGene</b>, "
@@ -501,7 +509,8 @@ BankIt expects - one file per sequence.</p>
 <h3>Settings</h3>
 <p>Four settings - everything else runs on sensible defaults:</p>
 <ul>
-<li><b>NCBI contact email</b> - required for the online BLAST.</li>
+<li><b>NCBI contact email</b> - fill in your own address (no preset); required
+for the online BLAST and reference downloads.</li>
 <li><b>identity threshold (97%)</b> - below it a sequence is flagged red.</li>
 <li><b>References compared per sequence (1-5)</b> - pre-checked on step 2.</li>
 <li><b>Concurrent BLAST submissions (1-4)</b> - parallel jobs speed up batches;
@@ -514,9 +523,11 @@ submissions stay rate-limited.</li>
 step 4 (summary) and the status bar.</p>
 
 <h3>Getting the submission out</h3>
-<p>One <code>&lt;SeqID&gt;.tbl</code> per sequence from the adopted variant. In
-the <b>BankIt</b> portal upload them with your original FASTA; organism and
-source modifiers are entered there.</p>
+<p>One <code>&lt;SeqID&gt;.tbl</code> per sequence from the adopted variant, plus
+<code>all_features.tbl</code> combining every record - for a multi-sequence
+submission it can replace the per-sequence files. In the <b>BankIt</b> portal
+upload the .tbl file(s) with your original FASTA; organism and source modifiers
+are entered there.</p>
 
 <h3>Good to know</h3>
 <ul>

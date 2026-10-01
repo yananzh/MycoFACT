@@ -89,7 +89,7 @@ def parse_quals(text: str) -> dict:
 
 
 class FeatureTable(QTableWidget):
-    edited = pyqtSignal()       # 用户编辑（含增删行）后发出，页面据此防抖重验
+    edited = pyqtSignal()       # 用户编辑后发出，页面据此防抖重验
 
     def __init__(self, parent=None):
         super().__init__(0, len(_COL_TYPES), parent)
@@ -165,7 +165,7 @@ class FeatureTable(QTableWidget):
         self._loading = False
 
     def add_feature(self, ftype: str, coords: str, strand: str = "+") -> int:
-        """插入一行待编辑的 feature（默认值由页面给定），返回新行号。"""
+        """插入一行待编辑的 feature（默认值由调用方给定），返回新行号。"""
         self._loading = True
         row = self.rowCount()
         self.insertRow(row)

@@ -46,9 +46,11 @@ def _in_n_run(seq: str, pos: int, min_run: int = 5) -> bool:
     return False
 
 
-def _aa_identity(a: str, b: str):
-    if not a or not b:
-        return None
+def _protein_aligner():
+    """蛋白回检的全局比对器（match 2 / mismatch -1 / open -5 / extend -1）。
+
+    独立成函数：审核页 View alignment 的蛋白比对展示复用同一参数，
+    保证弹窗里看到的与蛋白回检实际比较的口径完全一致。"""
     from Bio.Align import PairwiseAligner
     al = PairwiseAligner()
     al.mode = "global"
@@ -56,6 +58,13 @@ def _aa_identity(a: str, b: str):
     al.mismatch_score = -1
     al.open_gap_score = -5
     al.extend_gap_score = -1
+    return al
+
+
+def _aa_identity(a: str, b: str):
+    if not a or not b:
+        return None
+    al = _protein_aligner()
     res = al.align(a, b)
     best = res[0]   # 不调用 len()：最优解数量可能极大（惰性求值）
     t_arr, q_arr = best.aligned

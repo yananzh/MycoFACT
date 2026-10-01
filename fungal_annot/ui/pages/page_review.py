@@ -1,19 +1,23 @@
 """P4 注释审核页（§7.2，核心交互页）：两个列表——左侧基因名单，右侧注释结果列表
 （该序列每个参考一行：Reference / Status / Identity / Issues / Use，点行查看该
-variant，Use 列单选采纳，Issues 列悬停可见完整问题与建议）；feature 表格支持增删行、
-编辑后 600ms 防抖自动重验（无比对上下文的项目加载态禁编辑并给行内提示）；
-红灯序列在导出页导出时确认后才能导出（确认弹窗见 page_export）。"""
+variant，Use 列单选采纳，Issues 列悬停可见完整问题与建议）；feature 表格编辑后
+600ms 防抖自动重验（无比对上下文的项目加载态禁编辑并给行内提示）；不提供行增删——
+微调直接改导出的 .tbl 即可。红灯序列在导出页导出时确认后才能导出（确认弹窗见
+page_export）。"""
 import html
 
+from Bio.Data.CodonTable import TranslationError
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QTextCursor
-from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QFrame, QHBoxLayout,
+from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout,
                              QHeaderView, QLabel, QListWidget, QListWidgetItem,
                              QMessageBox, QPlainTextEdit, QPushButton, QRadioButton,
                              QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
+from ...core.feature_transfer import _spliced_cds, resolve_transl_table
 from ...core.tbl_writer import tbl_text_from, write_tbl
-from ...core.validator import status_of, validate
+from ...core.validator import (_match_ref_cds, _protein_aligner, _translate,
+                               status_of, validate)
 from ..widgets.feature_table import FeatureTable
 from ..widgets.help import (STATUS_COLOR as _STATUS_COLOR,
                             STATUS_MARK as _STATUS_MARK,
@@ -121,6 +125,55 @@ def _alignment_text(mapping, ref_seq, width: int = 60) -> str:
     return head + "  (| = match)\n\n" + "\n".join(out)
 
 
+def _codon_start(feat) -> int:
+    """qualifier codon_start → int（qualifier 是用户可编辑文本，异常按 1 处理）。"""
+    try:
+        return int((feat.qualifiers.get("codon_start") or ["1"])[0])
+    except (TypeError, ValueError):
+        return 1
+
+
+def _aligned_pair(a: str, b: str) -> tuple[str, str]:
+    """全局比对两条蛋白（与 validator 蛋白回检同一比对器参数），
+    返回等长的带 gap 串 (a', b')，供逐列并排展示。"""
+    best = _protein_aligner().align(a, b)[0]     # 惰性：不得对结果集调用 len()
+    t_arr, q_arr = best.aligned
+    ta, qb = [], []
+    prev_t = prev_q = 0
+    for (ts, te), (qs, qe) in zip(t_arr, q_arr):
+        # 块间为一侧缺失的 gap 区（块内已含错配列）：两侧都补齐到等宽，极端
+        # 情况下两侧同时有残基时以较短一侧的 gap 数兜底，保证列数一致
+        gap = max(ts - prev_t, qs - prev_q)
+        ta.append("-" * (gap - (ts - prev_t)) + a[prev_t:ts])
+        qb.append("-" * (gap - (qs - prev_q)) + b[prev_q:qs])
+        ta.append(a[ts:te])
+        qb.append(b[qs:qe])
+        prev_t, prev_q = te, qe
+    tail_t, tail_q = a[prev_t:], b[prev_q:]
+    gap = max(len(tail_t), len(tail_q))
+    ta.append(tail_t + "-" * (gap - len(tail_t)))
+    qb.append(tail_q + "-" * (gap - len(tail_q)))
+    return "".join(ta), "".join(qb)
+
+
+def _pair_blocks(a: str, b: str, width: int = 60) -> str:
+    """两条**已比对**（等长，含 gap '-'）蛋白序列的并排展示：R=参考 / Q=查询，
+    行首为各自原始 1-based 残基位（gap 不计数），行宽 width，'|' 标记相同残基。"""
+    out = []
+    pos_a = pos_b = 1
+    for i in range(0, len(a), width):
+        ra, rb = a[i:i + width], b[i:i + width]
+        marks = "".join("|" if x == y else " " for x, y in zip(ra, rb))
+        # 三行前缀必须等宽（10 列）：否则 '|' 相对残基整体偏移（回归缺陷）
+        out.append(f"R {pos_a:>6}  {ra}")
+        out.append(f"{'':>8}  {marks}")
+        out.append(f"Q {pos_b:>6}  {rb}")
+        out.append("")
+        pos_a += len(ra) - ra.count("-")
+        pos_b += len(rb) - rb.count("-")
+    return "\n".join(out).rstrip()
+
+
 class AlignmentDialog(QDialog):
     def __init__(self, title: str, text: str, parent=None):
         super().__init__(parent)
@@ -203,21 +256,12 @@ class PageReview(QWidget):
         self.feature_table.edited.connect(self._on_edited)
         right.addWidget(self.feature_table, 2)
 
-        # ---- 单条工具栏：编辑类与查看类用分隔线分组 ----
+        # ---- 工具栏：查看类与全局操作 ----
         toolbar = QHBoxLayout()
-        self.b_add_feat = QPushButton("Add feature")
-        self.b_add_feat.setToolTip("Insert a new CDS row spanning the whole sequence, "
-                                   "then edit the cells (type, coordinates, qualifiers)")
-        self.b_add_feat.clicked.connect(self._add_feature)
-        self.b_del_feat = QPushButton("Delete row")
-        self.b_del_feat.setToolTip("Delete the selected feature row(s) "
-                                   "(the source row cannot be deleted)")
-        self.b_del_feat.clicked.connect(self._delete_feature)
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setFrameShadow(QFrame.Shadow.Sunken)
         b_align = QPushButton("View alignment")
-        b_align.setToolTip("Reference vs query alignment, with match marks and coordinates")
+        b_align.setToolTip("Reference vs query alignment, with match marks and "
+                           "coordinates; includes the protein alignment when a "
+                           "CDS can be translated")
         b_align.clicked.connect(self._show_alignment)
         self.b_ref_feat = QPushButton("View reference features")
         self.b_ref_feat.setToolTip("Show the reference record's own five-column feature table")
@@ -227,9 +271,6 @@ class PageReview(QWidget):
                                   "settings (e.g. after changing the identity threshold)")
         self.b_recheck.clicked.connect(self._recheck_all)
         self.b_recheck.setEnabled(False)
-        toolbar.addWidget(self.b_add_feat)
-        toolbar.addWidget(self.b_del_feat)
-        toolbar.addWidget(sep)
         toolbar.addWidget(b_align)
         toolbar.addWidget(self.b_ref_feat)
         toolbar.addWidget(self.b_recheck)
@@ -349,8 +390,6 @@ class PageReview(QWidget):
             self.variant_table.setVisible(False)
             self.feature_table.setRowCount(0)
             self.feature_table.set_editable(False)
-            self.b_add_feat.setEnabled(False)
-            self.b_del_feat.setEnabled(False)
             self.lbl_project_hint.setVisible(False)
             self.lbl_issues.setVisible(False)
             return
@@ -362,8 +401,6 @@ class PageReview(QWidget):
         # 无比对上下文（项目加载态）→ 禁编辑并给出常驻提示
         editable = res.detail is not None
         self.feature_table.set_editable(editable)
-        self.b_add_feat.setEnabled(editable)
-        self.b_del_feat.setEnabled(editable)
         self.lbl_project_hint.setVisible(not editable)
         self.feature_table.build_from_features(res.features)
 
@@ -537,28 +574,6 @@ class PageReview(QWidget):
             self._update_issues_hint(self.current)
         self.win.log(f"Re-checked {n} result variant(s) with current settings")
 
-    # ---- feature 行增删 ----
-    def _add_feature(self):
-        s = next((x for x in self.win.sequences if x.seq_id == self.current), None)
-        if s is None:
-            QMessageBox.information(self, "No sequence",
-                                    "Annotate a sequence first, then add features.")
-            return
-        self.feature_table.add_feature(ftype="CDS", coords=f"1..{len(s.seq)}")
-        self.win.log(f"[{self.current}] feature row added - edit it, "
-                     f"re-validation follows automatically")
-        self._on_edited()
-
-    def _delete_feature(self):
-        rows = self.feature_table.selected_rows()
-        if not rows:
-            return
-        err = self.feature_table.remove_rows(rows)
-        if err:
-            QMessageBox.information(self, "Not allowed", err)
-            return
-        self._on_edited()
-
     def _reference_features_text(self):
         """参考记录自身的五列 feature table（不含 source，只读对照用）。"""
         res = self._viewed_result(self.current) if self.current else None
@@ -580,12 +595,63 @@ class PageReview(QWidget):
         dlg = AlignmentDialog(f"Reference features - {acc}", text, self)
         dlg.exec()
 
+    # ---- 蛋白比对（View alignment 附加节）----
+    def _protein_alignment_text(self, res):
+        """参考 vs 查询的蛋白比对文本（逐 CDS）；无任何可翻译 CDS 时返回 None。
+
+        CDS 配对（ref_key → 参考 CDS）、密码表解析与翻译全部复用 validator 蛋白
+        回检的同一套逻辑——弹窗里展示的就是蛋白回检实际比较的两条序列，用户据此
+        直观核对 internal_stop / protein_identity 等告警。查询侧按宿主序列原方向
+        拼接翻译（与 mapping 的 RC 空间无关）；末位终止符不展示，内部终止子保留
+        （移框排查时肉眼可见）。
+        """
+        d = res.detail
+        if d is None:
+            return None
+        seq_in = next((x for x in self.win.sequences
+                       if x.seq_id == res.seq_id), None)
+        if seq_in is None:
+            return None
+        user_table = self.win.make_config().user_transl_table
+        ref_cds = [f for f in d.ref_features if f.ftype == "CDS"]
+        sections = []
+        for f in res.features:
+            if f.ftype != "CDS":
+                continue
+            ref_f = _match_ref_cds(f, ref_cds)
+            table, _conflict, _certain = resolve_transl_table(
+                ref_f, d.preset, user_table)
+            if ref_f is None or table is None:
+                continue
+            try:
+                aa = _translate(_spliced_cds(f.parts, f.strand, seq_in.seq)[
+                    _codon_start(f) - 1:], table)
+                ref_aa = _translate(_spliced_cds(ref_f.parts, ref_f.strand,
+                                                 d.ref_seq)[_codon_start(ref_f) - 1:],
+                                    table)
+            except TranslationError:
+                continue
+            if not aa or not ref_aa:
+                continue
+            aa = aa[:-1] if aa.endswith("*") else aa
+            ref_aa = ref_aa[:-1] if ref_aa.endswith("*") else ref_aa
+            coords = ", ".join(f"{p.start}..{p.end}" for p in f.parts)
+            extra = f", codon_start {_codon_start(f)}" if _codon_start(f) != 1 else ""
+            sections.append(
+                f"Protein alignment - CDS {coords} (transl_table {table}{extra})\n"
+                f"reference vs query · global alignment · | = identical residue\n\n"
+                + _pair_blocks(*_aligned_pair(ref_aa, aa)))
+        return "\n".join(sections) if sections else None
+
     def _show_alignment(self):
         res = self._viewed_result(self.current) if self.current else None
         if res is None or res.detail is None:
             QMessageBox.information(self, "No alignment",
                                     "Missing alignment context (annotate in this session first).")
             return
-        dlg = AlignmentDialog("Reference vs Query - alignment view",
-                              _alignment_text(res.detail.mapping, res.detail.ref_seq), self)
+        text = _alignment_text(res.detail.mapping, res.detail.ref_seq)
+        prot = self._protein_alignment_text(res)
+        if prot:
+            text += "\n\n\n" + prot
+        dlg = AlignmentDialog("Reference vs Query - alignment view", text, self)
         dlg.exec()

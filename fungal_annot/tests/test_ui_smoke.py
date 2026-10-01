@@ -742,8 +742,9 @@ def test_review_auto_revalidate_on_edit(window, qtbot, ref_record_seq, ref_gb_te
     assert window.results["u2"]["REF00001.1"].status == "red"
 
 
-def test_feature_add_and_delete_row(window, qtbot, ref_record_seq, ref_gb_text):
-    """feature 行增删：source 行禁止删除（合成行验证守卫）；增删触发自动重验。"""
+def test_review_page_has_no_row_add_delete(window, ref_record_seq, ref_gb_text):
+    """第 3 页不提供行增删按钮（导出的 .tbl 用户可直接修改）；widget 层的
+    source 行守卫保留（仍可编程调用）。"""
     from fungal_annot.core.models import Feature, FeaturePart, SeqInput
     from fungal_annot.services.pipeline import annotate_sequence
 
@@ -757,28 +758,17 @@ def test_feature_add_and_delete_row(window, qtbot, ref_record_seq, ref_gb_text):
     page.refresh()
     page.current = "u3"
     page.load_result("u3")
-    n0 = page.feature_table.rowCount()
 
-    # source 行不可删（正常注释结果不含 source，用合成行验证守卫）
+    assert not hasattr(page, "b_add_feat")
+    assert not hasattr(page, "b_del_feat")
+    # 编辑能力不受影响：表格仍可编辑（有比对上下文，编辑触发器非空）
+    assert page.feature_table.editTriggers()
+
+    # widget 层守卫仍在：source 行不可删
     page.feature_table.build_from_features(
         [Feature(ftype="source", strand=1, parts=[FeaturePart(1, 100)])])
     page.feature_table.selectRow(0)
     assert page.feature_table.remove_rows(page.feature_table.selected_rows())
-    page.load_result("u3")
-
-    # 删除 CDS 行 → 行数减少
-    cds_row = next(r for r in range(n0) if page.feature_table.item(r, 0).text() == "CDS")
-    page.feature_table.selectRow(cds_row)
-    page._delete_feature()
-    assert page.feature_table.rowCount() == n0 - 1
-
-    # 新增一行 CDS（覆盖全长）→ 防抖重验跑完并写日志
-    page._add_feature()
-    assert page.feature_table.rowCount() == n0
-    last = page.feature_table.rowCount() - 1
-    assert page.feature_table.item(last, 0).text() == "CDS"
-    qtbot.waitUntil(lambda: "Auto re-validated" in window.statusBar().currentMessage(),
-                    timeout=5000)
 
 
 def test_issue_details_in_results_tooltip(window):
@@ -939,6 +929,10 @@ def test_export_confirms_red_sequences(window, tmp_path, ref_record_seq, ref_gb_
     page.refresh()
     out = tmp_path / "red_confirm"
     page.dir_edit.setText(str(out))
+    # Confirmed 独立列已移除（7 列）：确认状态并入 Status 列——红灯未确认
+    # 显示 Needs review（导出会拦），确认后显示 Red · confirmed（不再拦）
+    assert page.table.columnCount() == 7
+    assert page.table.item(0, 2).text() == "✗ Needs review"
 
     questions = []
 
@@ -957,6 +951,7 @@ def test_export_confirms_red_sequences(window, tmp_path, ref_record_seq, ref_gb_
     page._export()
     assert window.confirmed["r1"] is True
     assert (out / "r1.tbl").exists()
+    assert page.table.item(0, 2).text() == "✗ Red · confirmed"
 
 
 def test_recheck_preserves_pipeline_issues(window, ref_record_seq, ref_gb_text):
@@ -1039,7 +1034,7 @@ def test_app_guide_term_and_about_dialogs(window, qtbot):
     assert dlg.windowTitle() == "User Guide"
     body = APP_GUIDE[1]
     for must in ("Import", "Select Reference", "Review Annotation",
-                 "Export Results", "BankIt", "Ready"):
+                 "Export Results", "BankIt", "Ready", "all_features.tbl"):
         assert must in body, must
     for banned in ("F1", "Ctrl+,", "shortcut", "Shortcut"):
         assert banned not in body, banned            # 软件不设快捷键，文案同步
@@ -1350,6 +1345,90 @@ def test_annotate_pair_accounting(window):
                                  SeqResult(seq_id="p2", status="yellow"))
     assert window._annotate_pending == 0
     assert set(window.results["p2"]) == {"REF00001.1", "REF00002.1"}
+
+
+def test_alignment_view_shows_protein(window, ref_record_seq, ref_gb_text):
+    """View alignment：CDS 可翻译时附参考 vs 查询的蛋白比对文本（与蛋白回检
+    同一配对/密码表/比对参数）；5' 截断的夹具 → 查询侧出现前导 gap 并逐列匹配。
+    无参考对应（无 ref_key）或项目加载态（detail=None）→ 不产出蛋白节。"""
+    from fungal_annot.core.models import Feature, FeaturePart, SeqInput
+    from fungal_annot.services.pipeline import (AnnotateDetail, SeqResult,
+                                                annotate_sequence)
+
+    seq, _ = ref_record_seq
+    window.add_sequence(SeqInput(seq_id="al1", seq=seq[300:1600], gene_type="tef1",
+                                 source_qualifiers={"organism": "F. t",
+                                                    "country": "China"}))
+    window.results["al1"] = {"REF00001.1": annotate_sequence(
+        window.sequences[0], window.make_config(), reference_gb_text=ref_gb_text)}
+    page = window.page_review
+    page.refresh()
+    page.current = "al1"
+    page.load_result("al1")
+    res = window.results["al1"]["REF00001.1"]
+
+    text = page._protein_alignment_text(res)
+    assert text and "Protein alignment - CDS" in text
+    assert "transl_table 1" in text and "codon_start 3" in text
+    assert "-" in text                      # 查询 5' 截断 → 前导 gap
+    assert "|" in text                      # 同源夹具 → 相同残基列
+
+    bare = SeqResult(seq_id="al1", features=[Feature(ftype="CDS", strand=1,
+                                                     parts=[FeaturePart(1, 9)])])
+    bare.detail = AnnotateDetail()          # ref_features 为空 → CDS 无参考对应
+    assert page._protein_alignment_text(bare) is None
+    assert page._protein_alignment_text(SeqResult(seq_id="al1")) is None  # detail=None
+
+
+def test_protein_pair_blocks_marks_align():
+    """回归：蛋白比对 marks 行前缀曾比残基行宽 1 列，'|' 整体右偏一格。
+    三行前缀必须等宽（10 列），且 '|' 恰好落在两侧残基相同且非 gap 的列上。"""
+    from fungal_annot.ui.pages.page_review import _aligned_pair, _pair_blocks
+
+    text = _pair_blocks(*_aligned_pair("GFAGDDAPRAVFPSIVGRPRHHGIMGMGQKD",
+                                       "PSIVGRPRHHGIMGMGQKD"))
+    lines = text.splitlines()
+    assert len(lines) % 4 == 3                       # R / marks / Q / 空行 整组
+    for i in range(0, len(lines), 4):
+        r_raw, m_raw, q_raw = lines[i], lines[i + 1], lines[i + 2]
+        assert r_raw.startswith("R ") and q_raw.startswith("Q ")
+        r, m, q = r_raw[10:], m_raw[10:], q_raw[10:]
+        assert len(m) == len(r) == len(q)
+        for cr, cm, cq in zip(r, m, q):
+            expect = "|" if cr == cq and cr not in " -" else " "
+            assert cm == expect, (cr, cm, cq)
+
+
+def test_settings_dialog_requires_user_email(qtbot, monkeypatch):
+    """Settings 邮箱不预设：留空打开为空（有填写提示占位）；保存前必须由用户
+    填写——缺失/格式错误不关闭弹窗；用户已存的值原样回显。"""
+    from PyQt6.QtWidgets import QDialog, QMessageBox
+
+    from fungal_annot.ui.main_window import SettingsDialog
+
+    dlg = SettingsDialog({}, None)
+    qtbot.addWidget(dlg)
+    assert dlg.edits["email"].text() == ""              # 不预设邮箱
+    assert dlg.edits["email"].placeholderText()         # 只给占位提示
+    assert dlg.edits["identity_threshold"].text() == "97"
+
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning",
+                        staticmethod(lambda *a, **k: warned.append(a[2])
+                                     or QMessageBox.StandardButton.Ok))
+    dlg.edits["email"].setText("not-an-email")
+    dlg.accept()
+    assert warned and "email" in warned[0].lower()
+    assert dlg.result() != QDialog.DialogCode.Accepted
+
+    dlg.edits["email"].setText(" me@host.org ")
+    dlg.accept()
+    assert dlg.result() == QDialog.DialogCode.Accepted
+    assert dlg.values()["email"] == "me@host.org"
+
+    dlg2 = SettingsDialog({"email": "saved@host.org"}, None)
+    qtbot.addWidget(dlg2)
+    assert dlg2.edits["email"].text() == "saved@host.org"   # 用户已存值回显（非预设）
 
 
 def test_blast_queue_concurrency_setting(window):
