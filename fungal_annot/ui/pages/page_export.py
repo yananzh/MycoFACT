@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QLineEdit,
 from ...services.pipeline import write_outputs
 from ..widgets.help import MARKER_HINT, STATUS_COLOR, STATUS_MARK, show_page_help
 
-_N_COLS = 8
+_N_COLS = 7
 
 
 class PageExport(QWidget):
@@ -34,7 +34,7 @@ class PageExport(QWidget):
         self.table = QTableWidget(0, _N_COLS)
         self.table.setHorizontalHeaderLabels(
             ["Seq ID", "Marker", "Status", "Features", "Reference", "Region",
-             "Orientation", "Confirmed"])
+             "Orientation"])
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setDefaultAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -100,18 +100,22 @@ class PageExport(QWidget):
                     self.table.setItem(row, col, QTableWidgetItem(text))
                 continue
             p = res.provenance
+            # 确认状态并入 Status 列：只有红灯才谈"知情确认"——未确认显示
+            # Needs review（导出会拦），已确认显示 Red · confirmed（不再拦）；
+            # 绿/黄序列无确认概念，不显示任何确认信息
             status_item = QTableWidgetItem(
-                STATUS_MARK.get(res.status, res.status))
+                "✗ Red · confirmed" if res.status == "red"
+                and self.win.confirmed.get(s.seq_id)
+                else STATUS_MARK.get(res.status, res.status))
             status_item.setForeground(
                 QColor(STATUS_COLOR.get(res.status, "#24292f")))
-            confirmed = bool(self.win.confirmed.get(s.seq_id))
-            conf_item = QTableWidgetItem("Yes" if confirmed else "No")
-            # 只有"红灯未确认"的 No 是阻断性的，标红；其余中性灰
-            conf_item.setForeground(
-                QColor(STATUS_COLOR["red"])
-                if res.status == "red" and not confirmed else QColor("#57606a"))
+            if res.status == "red":
+                status_item.setToolTip(
+                    "Knowingly accepted at a previous export - further exports "
+                    "will not ask again" if self.win.confirmed.get(s.seq_id)
+                    else "Export will ask to confirm this sequence knowingly")
             # Seq ID / Marker / Features / Reference / Region / Orientation 按列布局，
-            # Status(2) 与 Confirmed(7) 两列带颜色单独填
+            # Status(2) 带颜色单独填
             plain = [s.seq_id, s.gene_type, str(len(res.features)),
                      p.reference or "-", p.region or "-", p.orientation]
             for col, text in zip((0, 1, 3, 4, 5, 6), plain):
@@ -121,7 +125,6 @@ class PageExport(QWidget):
                                     f"the adopted one ({chosen_acc})")
                 self.table.setItem(row, col, item)
             self.table.setItem(row, 2, status_item)
-            self.table.setItem(row, 7, conf_item)
         # 无结果时禁用导出（点击才弹提示没有意义）
         has_results = any(self.win.results.values())
         self.b_export.setEnabled(has_results)
