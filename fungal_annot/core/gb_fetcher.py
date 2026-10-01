@@ -70,7 +70,12 @@ def fetch_gb_text(accession: str, email: str = "", api_key: str = "",
         with open(cache_file, encoding="utf-8") as fh:
             return fh.read(), region
 
-    Entrez.email = email or "fungal-annot@example.org"
+    # 不预设邮箱（NCBI 要求真实联系方式，必须由用户在 Settings / --email 提供）
+    email = (email or "").strip()
+    if not email:
+        raise GbFetchError("NCBI contact email is missing - set it in menu ▸ Settings "
+                           "(CLI: pass --email) before downloading.")
+    Entrez.email = email
     Entrez.api_key = api_key or None
     if throttle is None:
         throttle = Throttle(0.35 if api_key else 1.2)

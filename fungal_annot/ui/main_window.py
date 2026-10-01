@@ -9,6 +9,7 @@ Settings / Guide / About 三个直接动作（点击即执行，无下拉子菜�
 注释队列小并发、按（序列 × 参考）成对提交。
 """
 import os
+import re
 
 from PyQt6.QtCore import QSettings, QSize, Qt
 from PyQt6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QFormLayout,
@@ -31,10 +32,16 @@ from .widgets.step_bar import StepBar
 
 
 class SettingsDialog(QDialog):
-    """设置弹窗（简化版）：只露出普通用户需要的三项——NCBI 邮箱（BLAST 必需）、
-    identity 阈值（决定红灯复核线）、每序列对比参考数；其余高级项（api_key /
-    blast_db / organism_filter / hitlist_size / cache_dir / auto_partial）不再
-    展示，由 make_config 的默认值兜底，settings.json 里已有的值保存时原样带回。"""
+    """设置弹窗（简化版）：只露出普通用户需要的四项——NCBI 邮箱（必须由用户自行
+    填写，不预设默认值，保存前校验）、identity 阈值（决定红灯复核线）、每序列
+    对比参考数、BLAST 并发数；其余高级项（api_key / blast_db / organism_filter /
+    hitlist_size / cache_dir / auto_partial）不再展示，由 make_config 的默认值
+    兜底，settings.json 里已有的值保存时原样带回。
+
+    NCBI 侧同样强制：参考下载（gb_fetcher）在邮箱缺失时直接报错，不会静默
+    回退到任何预设地址。"""
+
+    _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
@@ -46,10 +53,13 @@ class SettingsDialog(QDialog):
                   ("identity_threshold", "identity threshold %"),
                   ("default_refs", "References compared per sequence (1-5)"),
                   ("blast_concurrency", "Concurrent BLAST submissions (1-4)")]
-        # 与 make_config 的兜底默认值保持一致（identity_threshold 空白会被误读为未设置）
+        # 与 make_config 的兜底默认值保持一致（identity_threshold 空白会被误读为未设置）；
+        # email 有意不在 defaults 里——字段留空，由用户填写
         defaults = {"identity_threshold": "97", "default_refs": "3",
                     "blast_concurrency": "3"}
-        hints = {"email": "NCBI uses this to contact you about the submission.",
+        placeholders = {"email": "your.name@host.org"}
+        hints = {"email": "Fill in your own address - NCBI uses it to contact you "
+                          "about the submission.",
                  "identity_threshold": "Below this identity a sequence is "
                                        "flagged RED for manual review.",
                  "blast_concurrency": "How many BLAST jobs run in parallel; "
@@ -57,6 +67,8 @@ class SettingsDialog(QDialog):
                                       "apart). Higher risks NCBI throttling."}
         for key, label in fields:
             edit = QLineEdit(str(settings.get(key) or defaults.get(key, "")))
+            if key in placeholders:
+                edit.setPlaceholderText(placeholders[key])
             self.edits[key] = edit
             form.addRow(label, edit)
             if key in hints:
@@ -71,6 +83,17 @@ class SettingsDialog(QDialog):
         form.addRow(bb)
         # 四行表单无需大弹窗：直接贴 sizeHint（不得再手动放大）
         self.resize(self.sizeHint())
+
+    def accept(self):
+        """保存前校验邮箱：必须由用户填写（粗检格式，挡住明显笔误）。"""
+        email = self.edits["email"].text().strip()
+        if not self._EMAIL_RE.match(email):
+            QMessageBox.warning(self, "NCBI email required",
+                                "Enter your own NCBI contact email "
+                                "(e.g. your.name@host.org) - NCBI uses it to "
+                                "contact you about your submissions.")
+            return
+        super().accept()
 
     def values(self) -> dict:
         d = dict(self._base)
