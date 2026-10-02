@@ -56,17 +56,16 @@ def test_steps_laid_out_horizontally(qtbot, window):
 
 
 def test_icon_toolbar_replaced_by_menu_bar(window):
-    """原图标工具栏（New/Open/Save/Settings/Log）改为文字菜单栏；
-    后精简为 Settings / Guide / About 三个直接动作，无子菜单、无快捷键
-    （软件不设快捷键；更新检查入口在 About 弹窗内，不单列菜单项）。"""
+    """项目操作收纳在 File 菜单下，其余入口保持文字直接动作，无快捷键。"""
     from PyQt6.QtWidgets import QToolBar
 
     assert window.findChildren(QToolBar) == []
     actions = window.menuBar().actions()
-    assert [a.text() for a in actions] == ["New", "Open", "Save", "Save As",
-                                         "Settings", "Guide", "About", "Log"]
-    assert all(a.menu() is None for a in actions)          # 直接动作，无下拉
-    assert all(a.shortcut().toString() == "" for a in actions)   # 不注册快捷键
+    assert [a.text() for a in actions] == ["File", "Settings", "Guide", "About", "Log"]
+    file_actions = actions[0].menu().actions()
+    assert [a.text() for a in file_actions] == ["New", "Open", "Save", "Save As"]
+    assert all(a.menu() is None for a in actions[1:])      # 其余入口为直接动作
+    assert all(a.shortcut().toString() == "" for a in actions + file_actions)
 
 
 def test_log_dock_removed_status_bar_summarises(window):
@@ -216,11 +215,18 @@ def test_import_and_remove(window):
 def test_gui_has_no_offline_entry(window):
     """验收：GUI 无任何本地参考入口（离线仅 CLI --ref-gb）。"""
     from fungal_annot.core.models import SeqInput
+    from PyQt6.QtWidgets import QPushButton
 
     assert not hasattr(window, "local_ref_text")
     assert not hasattr(window, "local_ref_name")
     assert not hasattr(window, "load_local_reference")
     assert not hasattr(window.page_reference, "lbl_offline")
+    assert not hasattr(window.page_import, "_use_reference")
+    assert not hasattr(window.page_reference, "_load_local_reference")
+    assert not hasattr(window.page_reference, "b_local")
+    labels = [b.text() for b in window.findChildren(QPushButton)]
+    assert "Use reference" not in labels
+    assert "Local GenBank" not in labels
 
     window.add_sequence(SeqInput(seq_id="s1", seq="ACGT" * 100, gene_type="tef1"))
     window.page_reference.refresh()
@@ -426,7 +432,7 @@ def test_import_page_sequence_list_and_buttons(window):
         ["Seq ID", "Length (bp)", "Marker", "BLAST", ""]
     buttons = page.findChildren(QPushButton)
     assert [b.text() for b in buttons] == ["BLAST", "Browse", "Example", "Clear",
-                                           "STOP", "Use reference", "Help"]
+                                           "STOP", "Help"]
     assert buttons[0].objectName() == "PrimaryButton"      # BLAST 主行动
     assert all(b.objectName() == "" for b in buttons[1:])  # 其余默认描边
     actions = buttons[:5]                                  # 五个动作按钮等宽（Help 除外）
@@ -445,10 +451,10 @@ def test_example_button_loads_demo_fasta(window):
     text = page.import_box.toPlainText()
     assert text.startswith(">")
     seqs = parse_pasted_input(text)
-    assert [s.seq_id for s in seqs] == ["ACT_G2", "TUB2_G2", "Gapdh_G2", "CAL_G2"]
+    assert [s.seq_id for s in seqs] == ["ACT_G2", "TUB2_G2", "JN940715.1"]
     assert all(len(s.seq) > 100 for s in seqs)
     message = window.statusBar().currentMessage()
-    assert "4 sequence(s)" in message and "click BLAST to run" in message
+    assert "3 sequence(s)" in message and "click BLAST to run" in message
 
 
 def test_import_page_blast_section(window):
@@ -1009,15 +1015,16 @@ def test_page_help_buttons_and_guides(window):
                        (window.page_export, "page_export")):
         helps = [b for b in page.findChildren(QPushButton) if b.text() == "Help"]
         assert len(helps) == 1, (type(page).__name__, helps)
-    # 每篇指南含三段结构与关键内容，弹窗可构建
+    # 每篇指南保留操作步骤与关键内容，弹窗可构建
     dlg = build_page_help_dialog("page_import", window)
     assert dlg.windowTitle() == "How to use: Import & BLAST"
     for term, must_have in (("page_import", "BLAST"),
-                            ("page_reference", "Use"),
+                            ("page_reference", "Start Annotation"),
                             ("page_review", "Needs review"),
                             ("page_export", "BankIt")):
         html = PAGE_HELP[term][1]
-        assert "How to use" in html and "Terms" in html and "Tips" in html
+        assert "How to use" in html
+        assert "Use reference" not in html and "Local GenBank" not in html
         assert must_have in html
 
 
@@ -1038,7 +1045,8 @@ def test_app_guide_term_and_about_dialogs(window, qtbot):
     for must in ("Import", "Select Reference", "Review Annotation",
                  "Export Results", "BankIt", "Ready", "all_features.tbl"):
         assert must in body, must
-    for banned in ("F1", "Ctrl+,", "shortcut", "Shortcut"):
+    for banned in ("F1", "Ctrl+,", "shortcut", "Shortcut", "Use reference",
+                   "Local GenBank", "work offline"):
         assert banned not in body, banned            # 软件不设快捷键，文案同步
     # 术语词条也能构建
     assert build_term_help_dialog("codon_start", window).windowTitle() == "codon_start"

@@ -62,8 +62,8 @@ threads, so the UI stays responsive.
   portal form).
 - **Multi-gene presets** — the gene type is auto-detected from BLAST hit titles or the
   reference annotation, with a generic preset as fallback.
-- **Three ways to specify the reference** — online BLAST, direct accession input (skips
-  BLAST), or a local reference GenBank file for fully offline runs (GUI and CLI).
+- **Reference selection** — find references with online BLAST and compare selected
+  hits. The CLI also accepts an accession or a local GenBank reference.
 - **Instant revalidation of edits** — red-flagged items require manual confirmation
   before export.
 
@@ -98,11 +98,9 @@ SVG with `python scripts/build_icons.py` (needs PyQt6 + Pillow).
 python main.py
 ```
 
-This opens the four-step wizard described above. Click **Example** on the first page to
-load the built-in demo (`demo/example.fasta`). To skip BLAST, click **Use reference**,
-then either enter accessions through **View match**, or click **Local GenBank** on
-step 2 for fully offline annotation. A local reference is applied to all imported
-sequences; per-sequence reference selection can be adjusted before annotation.
+Enter your NCBI email in **Settings**, load FASTA (or click **Example**), then click
+**BLAST**. Select references, review the annotations, and export the `.tbl` files.
+Use **View match** on step 2 to adjust reference accessions if needed.
 
 Use **Save / Save As** to save a JSON project and **Open** to resume it. The project
 includes imported sequences, unimported text, references, results, confirmations,

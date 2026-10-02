@@ -27,6 +27,8 @@ class PageExport(QWidget):
     def __init__(self, win):
         super().__init__()
         self.win = win
+        self._default_directory = self.win.last_export_dir
+        self._directory_selected = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
@@ -46,7 +48,9 @@ class PageExport(QWidget):
         dir_layout = QHBoxLayout()
         dir_layout.addWidget(QLabel("Output directory:"))
         self.dir_edit = QLineEdit()
+        self.dir_edit.setToolTip("Shared folder for the project file and exported feature tables")
         self.dir_edit.setText(str(self.win.last_export_dir))
+        self.dir_edit.textChanged.connect(self._on_directory_changed)
         dir_layout.addWidget(self.dir_edit, 1)
         b_dir = QPushButton("Browse...")
         b_dir.clicked.connect(self._pick_dir)
@@ -69,10 +73,28 @@ class PageExport(QWidget):
         btns.addWidget(b_help)
         layout.addLayout(btns)
 
+    def _on_directory_changed(self, text):
+        self._directory_selected = True
+        self.win.last_export_dir = text.strip()
+        self.win.mark_dirty()
+
+    def suggest_directory(self, paths):
+        """Use the first loaded FASTA's folder until a directory has been selected."""
+        if paths and not self._directory_selected:
+            self.dir_edit.setText(os.path.join(
+                os.path.dirname(os.path.abspath(paths[0])), "MycoFACT_out"))
+            self._directory_selected = True
+
+    def reset_directory(self, directory=None):
+        self.dir_edit.setText(self._default_directory if directory is None else directory)
+        self._directory_selected = directory is not None
+
     def _pick_dir(self):
-        d = QFileDialog.getExistingDirectory(self, "Select output directory")
+        d = QFileDialog.getExistingDirectory(
+            self, "Select output directory", self.dir_edit.text().strip())
         if d:
             self.dir_edit.setText(d)
+            self._directory_selected = True
 
     def refresh(self):
         self.table.clearSpans()

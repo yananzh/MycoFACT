@@ -172,8 +172,8 @@ class PageImport(QWidget):
         b_browse.setToolTip("Pick FASTA files and load them into the box")
         b_browse.clicked.connect(self._add_files_dialog)
         b_example = QPushButton("Example")
-        b_example.setToolTip("Load the bundled example FASTA (demo/example.fasta, 4 "
-                             "Colletotrichum marker sequences) into the box, then click BLAST")
+        b_example.setToolTip("Load the bundled marker sequences (demo/example.fasta) "
+                             "into the box, then click BLAST")
         b_example.clicked.connect(self._load_example)
         b_clear = QPushButton("Clear")
         b_clear.setToolTip("Clear the input box and remove all imported sequences")
@@ -190,10 +190,6 @@ class PageImport(QWidget):
         row.addWidget(b_example)
         row.addWidget(b_clear)
         row.addWidget(self.b_stop)
-        b_reference = QPushButton("Use reference")
-        b_reference.setToolTip("Skip BLAST and use an accession or a local GenBank reference")
-        b_reference.clicked.connect(self._use_reference)
-        row.addWidget(b_reference)
         b_help = QPushButton("Help")
         b_help.setToolTip("How to use this page: steps, terms, tips")
         b_help.clicked.connect(lambda: show_page_help("page_import", self))
@@ -394,7 +390,7 @@ class PageImport(QWidget):
 
     # ---- BLAST 任务（点击即自动导入框内文本并启动）----
     def import_pending_sequences(self):
-        """Shared import for BLAST and the direct/offline reference workflow."""
+        """Import the input box before starting BLAST."""
         if not self.import_box.toPlainText().strip():
             return bool(self.win.sequences)
         try:
@@ -407,15 +403,6 @@ class PageImport(QWidget):
             self.win.add_sequence(seq)
         self.import_box.clear()
         return True
-
-    def _use_reference(self):
-        if self.win._blast_pending or self.win._annotate_pending:
-            QMessageBox.warning(self, "Tasks running", "Wait for the current tasks before importing more sequences.")
-            return
-        if self.import_pending_sequences():
-            self.win.reference_mode = True
-            self.win.mark_dirty()
-            self.win.go_page(1)
 
     def _start(self):
         if not self.b_blast.isEnabled():

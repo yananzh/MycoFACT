@@ -149,7 +149,7 @@ class MainWindow(QMainWindow):
         self.local_references = {}
         self.reference_mode = False
         self._blast_running: set[str] = set()   # 已提交 BLAST、尚未返回的序列
-        self.last_export_dir = os.path.join(os.path.expanduser("~"), "fungal_annot_out")
+        self.last_export_dir = os.path.join(os.path.expanduser("~"), "MycoFACT_out")
         self.exported = False
 
         # ---- 任务队列 ----
@@ -179,6 +179,7 @@ class MainWindow(QMainWindow):
         self.page_reference = PageReference(self)
         self.page_review = PageReview(self)
         self.page_export = PageExport(self)
+        self.page_import.import_box.filesLoaded.connect(self.page_export.suggest_directory)
         self.page_import.import_box.textChanged.connect(self.mark_dirty)
         for page in (self.page_import, self.page_reference,
                      self.page_review, self.page_export):
@@ -197,11 +198,12 @@ class MainWindow(QMainWindow):
         v.addWidget(self.stack, 1)
         self.setCentralWidget(central)
 
-        # ---- 菜单栏：四个直接动作（点击即执行，无子菜单，无快捷键）----
+        # ---- 菜单栏：File 下收纳项目操作，其余入口为直接动作 ----
         bar = self.menuBar()
+        file_menu = bar.addMenu("File")
         for title, callback in (("New", self._new_project), ("Open", self._open_project),
                                 ("Save", self._save_project), ("Save As", self._save_project_as)):
-            act = bar.addAction(title)
+            act = file_menu.addAction(title)
             act.triggered.connect(callback)
         act = bar.addAction("Settings")
         act.triggered.connect(self._open_settings)
@@ -743,11 +745,26 @@ class MainWindow(QMainWindow):
                                 "Fix the invalid cells on step 3 before saving.")
             return False
         path = self.project_path
-        if not path or force_dialog:
-            path, _ = QFileDialog.getSaveFileName(self, "Save project", path or "",
+        output_directory = self.last_export_dir.strip()
+        directory_changed = bool(path and output_directory and
+                                 os.path.normcase(os.path.dirname(os.path.abspath(path))) !=
+                                 os.path.normcase(os.path.abspath(output_directory)))
+        if not path or force_dialog or directory_changed:
+            filename = os.path.basename(path) if path else "MycoFACT_project.json"
+            suggested_path = (os.path.join(os.path.abspath(output_directory), filename)
+                              if output_directory else path or "")
+            try:
+                if output_directory:
+                    os.makedirs(output_directory, exist_ok=True)
+            except OSError as ex:
+                QMessageBox.warning(self, "Save failed", str(ex))
+                return False
+            path, _ = QFileDialog.getSaveFileName(self, "Save project", suggested_path,
                                                  "MycoFACT project (*.json)")
         if not path:
             return False
+        path = os.path.abspath(path)
+        output_directory = os.path.dirname(path)
         try:
             save_project(path, self.sequences, self.hits, self.selected_refs, self.results,
                          self.settings, self.confirmed, self.exported, self.chosen_ref,
@@ -755,11 +772,12 @@ class MainWindow(QMainWindow):
                                     "local_references": self.local_references,
                                     "reference_mode": self.reference_mode,
                                     "task_log": self.task_log,
-                                    "last_export_dir": self.last_export_dir})
+                                    "last_export_dir": output_directory})
         except (OSError, ValueError, TypeError) as ex:
             QMessageBox.warning(self, "Save failed", str(ex))
             return False
         self.project_path = path
+        self.page_export.reset_directory(output_directory)
         self.log(f"Saved project: {path}")
         self.dirty = False
         self.setWindowModified(False)
@@ -775,6 +793,7 @@ class MainWindow(QMainWindow):
         self.reference_mode = False
         self.task_log.clear()
         self.page_import.import_box.clear()
+        self.page_export.reset_directory()
         self.project_path = None
         self.go_page(0)
         self.dirty = False
@@ -814,8 +833,7 @@ class MainWindow(QMainWindow):
         self.local_references = local_refs
         self.reference_mode = bool(workspace.get("reference_mode", False))
         self.task_log = list(workspace.get("task_log", []))
-        self.last_export_dir = workspace.get("last_export_dir", self.last_export_dir)
-        self.page_export.dir_edit.setText(self.last_export_dir)
+        self.page_export.reset_directory(os.path.dirname(os.path.abspath(path)))
         self.page_import.import_box.setPlainText(workspace.get("import_text", ""))
         # Legacy booleans cannot identify the reference or result that was accepted.
         self.confirmed = {sid: token for sid, token in self.confirmed.items()

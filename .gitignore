@@ -23,6 +23,7 @@ dist/
 
 # 生成物：演示输出与在线测试输出（可由脚本重新生成）
 demo_out/
+demo/MycoFACT_out/
 online_test/out/
 online_test/out2/
 

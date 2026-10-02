@@ -53,8 +53,8 @@ BLAST 与解析在后台线程执行，界面保持响应。
   BankIt 门户表单录入）。
 - **多基因预设** — 基因类型自动从 BLAST 命中标题 / 参考注释识别，无法识别时
   回退通用 Generic 预设。
-- **三种指定参考的方式** — 在线 BLAST、直接指定 accession（跳过 BLAST）、
-  本地参考 GenBank 离线模式（GUI 与 CLI 均支持）。
+- **参考选择** — 在线 BLAST 查找参考，勾选命中记录参与对比。
+  命令行还支持指定 accession 或本地 GenBank 参考。
 - **审核编辑即时重验** — 红灯项需人工确认方可导出。
 
 ## 安装
@@ -88,10 +88,9 @@ Pillow）。
 python main.py
 ```
 
-打开上文所述的四步向导。首页点 **Example** 可载入内置示例（`demo/example.fasta`）
-先行浏览向导。要跳过 BLAST，点 **Use reference**，然后在第 2 步通过
-**View match** 填写 accession，或点 **Local GenBank** 加载本地参考，完成离线注释。
-本地参考默认应用于所有已导入序列；开始注释前可调整每条序列的参考选择。
+在 **Settings** 填写自己的 NCBI 邮箱，载入 FASTA（或点 **Example**），再点
+**BLAST**。依次选择参考、审核注释并导出 `.tbl` 文件。
+需要调整参考 accession 时，可使用第 2 步的 **View match**。
 
 通过 **Save / Save As** 保存 JSON 项目，通过 **Open** 恢复。项目包含已导入序列、
 尚未导入的文本、参考、结果、确认状态、设置和任务日志。由于比对上下文不序列化，
