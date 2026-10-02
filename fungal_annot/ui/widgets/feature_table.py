@@ -53,14 +53,13 @@ def parse_coords(text: str) -> list[FeaturePart]:
         seg = seg.strip()
         if not seg:
             continue
-        pl = seg.startswith("<")
-        ph = seg.endswith(">")
-        body = seg.strip("<>")
-        if ".." not in body:
+        if ".." not in seg:
             raise ValueError(f"Coordinate segment '{seg}' is missing '..'")
-        a, b = body.split("..", 1)
+        a, b = (bound.strip() for bound in seg.split("..", 1))
+        pl = a.startswith("<")
+        ph = b.startswith(">")
         try:
-            start, end = int(a), int(b)
+            start, end = int(a[1:] if pl else a), int(b[1:] if ph else b)
         except ValueError as ex:
             raise ValueError(f"Coordinate segment '{seg}' has non-integer bounds") from ex
         if start > end:
@@ -111,6 +110,7 @@ class FeatureTable(QTableWidget):
         self.setColumnWidth(2, 220)
         self._loading = False
         self.cellChanged.connect(self._emit_edited)
+        self.horizontalHeader().sectionResized.connect(self._fit_rows)
         self.set_editable(True)
 
     def set_editable(self, editable: bool):
@@ -127,6 +127,11 @@ class FeatureTable(QTableWidget):
         """行高随 qualifier 行数增长，多行内容完整可见（否则被单行行高裁掉）。"""
         n_lines = max(1, text.count("\n") + 1)
         self.setRowHeight(row, n_lines * self.fontMetrics().height() + 8)
+        self.resizeRowToContents(row)  # include wrapped qualifier lines at the actual column width
+
+    def _fit_rows(self, *_args):
+        for row in range(self.rowCount()):
+            self.resizeRowToContents(row)
 
     def _emit_edited(self, row, col):
         if self._loading:
@@ -203,8 +208,7 @@ class FeatureTable(QTableWidget):
         编辑器只让用户改坐标/qualifier，_ROW_SOURCE_ROLE 上留着该行的来源
         Feature；缺了它，validator 就无法回查参考 CDS，编辑后密码表冲突检测、
         蛋白回检与 identity 门禁会静默失效（历史缺陷）。
-        用户增删区段时按序还原能对上的前缀，对不上的保持 ref_start/ref_end=0
-        （validator 会就此给出 ref_context_missing 提示，而不是假装通过）。
+        仅未改变坐标的区段保留参考区间；改动区段由重验根据 mapping 重新定位。
         """
         out = []
         for row in range(self.rowCount()):
@@ -229,8 +233,11 @@ class FeatureTable(QTableWidget):
             ref_key = None
             if isinstance(src, Feature):
                 ref_key = src.ref_key
-                for new_p, old_p in zip(parts, src.parts, strict=False):
-                    new_p.ref_start, new_p.ref_end = old_p.ref_start, old_p.ref_end
+                for new_p in parts:
+                    old_p = next((p for p in src.parts
+                                  if (p.start, p.end) == (new_p.start, new_p.end)), None)
+                    if old_p is not None:
+                        new_p.ref_start, new_p.ref_end = old_p.ref_start, old_p.ref_end
             out.append(Feature(ftype=ftype, strand=1 if strand_text == "+" else -1,
                                parts=parts, qualifiers=quals_d, ref_key=ref_key))
         return out

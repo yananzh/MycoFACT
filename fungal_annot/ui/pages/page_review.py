@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout,
                              QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...core.feature_transfer import _spliced_cds, resolve_transl_table
+from ...core.models import Issue
 from ...core.tbl_writer import tbl_text_from, write_tbl
 from ...core.validator import (_match_ref_cds, _protein_aligner, _translate,
                                status_of, validate)
@@ -285,8 +286,8 @@ class PageReview(QWidget):
 
         # 项目加载态提示（无比对上下文 → 禁编辑，替代原 Re-validate 弹窗）
         self.lbl_project_hint = QLabel(
-            "Loaded from a project file - editing is disabled because the alignment "
-            "context is not stored in the project. Re-annotate in step 2 to restore it.")
+            "No alignment context is available for this result. Editing is disabled; "
+            "re-annotate in step 2 to restore the alignment and enable editing.")
         self.lbl_project_hint.setObjectName("Hint")
         self.lbl_project_hint.setWordWrap(True)
         self.lbl_project_hint.setVisible(False)
@@ -296,6 +297,8 @@ class PageReview(QWidget):
         self._reval_timer = QTimer(self)
         self._reval_timer.setSingleShot(True)
         self._reval_timer.timeout.connect(self._auto_revalidate)
+        self._pending = set()  # (seq_id, accession), independent of the visible row
+        self._drafts = {}      # invalid/in-flight cell text survives page navigation
 
     # ---- variant 辅助（同序列多参考结果）----
     def _variants(self, sid: str) -> dict:
@@ -360,6 +363,10 @@ class PageReview(QWidget):
             row = next((i for i in range(self.seq_list.count())
                         if self.seq_list.item(i).data(Qt.ItemDataRole.UserRole) == keep), 0)
             self.seq_list.setCurrentRow(row)
+        else:
+            self.current = None
+            self.viewed_ref = None
+            self.load_result("")
 
     def _refresh_seq_row(self, seq_id: str):
         """只刷新清单中该序列的状态行（自动重验时避免整表重建打断编辑）。"""
@@ -403,6 +410,15 @@ class PageReview(QWidget):
         self.feature_table.set_editable(editable)
         self.lbl_project_hint.setVisible(not editable)
         self.feature_table.build_from_features(res.features)
+        draft = self._drafts.get((seq_id, self.viewed_ref))
+        if draft is not None and draft[0] is res:
+            self.feature_table._loading = True
+            try:
+                for row, cells in enumerate(draft[1]):
+                    for col, value in enumerate(cells):
+                        self.feature_table.item(row, col).setText(value)
+            finally:
+                self.feature_table._loading = False
 
     # ---- Annotation results ----
     def _populate_variant_table(self, seq_id: str):
@@ -503,6 +519,7 @@ class PageReview(QWidget):
         if not sid or acc not in self._variants(sid):
             return
         self.viewed_ref = acc
+        self.win.invalidate_result(sid)
         self.win.chosen_ref[sid] = acc
         self.win.log(f"[{sid}] Adopted annotation from {acc}")
         self.win._reconcile_gene_types()     # 采纳者变化 → 序列基因型标签随之校正
@@ -513,62 +530,91 @@ class PageReview(QWidget):
     # ---- 编辑重验 ----
     def _on_edited(self):
         res = self._viewed_result(self.current) if self.current else None
-        if res is None:
+        if res is None or res.detail is None:
             return
-        # 立即落盘：防抖只延迟重验。否则 600ms 窗口内切页/切序列会触发
-        # refresh→build_from_features 用旧 features 重建表格，编辑静默丢失
+        key = (self.current, self._viewed_acc(self.current))
+        self._drafts[key] = (res, [[self.feature_table.item(r, c).text()
+                                   for c in range(self.feature_table.columnCount())]
+                                  for r in range(self.feature_table.rowCount())])
+        self.win.invalidate_result(self.current)
+        res.validation_pending = True
+        res.status = "pending"
         try:
             res.features = self.feature_table.to_features()
-        except ValueError:
-            pass    # 半成品行：保留上次有效 features，防抖重验会照常提示
+        except ValueError as ex:
+            res.edit_error = str(ex)
+            self.win.log(f"⚠ Invalid edit: {ex}")
+            res.status = "red"
+            res.issues = list(res.detail.base_issues) + [Issue("error", "edit_invalid", str(ex))]
         else:
-            # 缓存文本与 features 同步刷新（导入侧不再读它，但项目保存会写，
-            # 留着旧文本会让 .json 里冻结一份与表格不符的表）
+            res.edit_error = ""
+            res.issues = list(res.detail.base_issues) + [Issue(
+                "info", "validation_pending", "Edited annotation is waiting for validation")]
             res.tbl_text = tbl_text_from(res.features, res.seq_id)
+        self._pending.add(key)
+        self._refresh_seq_row(self.current)
+        self._update_issues_hint(self.current)
+        self.win.update_summary()
         self._reval_timer.start(600)
 
-    def _auto_revalidate(self):
-        sid = self.current
-        res = self._viewed_result(sid) if sid else None
-        if res is None or res.detail is None:
-            return      # 项目加载态无比对上下文：静默跳过（行内提示已说明）
+    def _validate_result(self, sid, acc):
+        res = self._variants(sid).get(acc)
+        if res is None:
+            self._pending.discard((sid, acc))
+            self._drafts.pop((sid, acc), None)
+            return True
+        if getattr(res, "edit_error", ""):
+            return False
+        if res.detail is None:
+            return True  # saved results are read-only until re-annotated
         s = next((x for x in self.win.sequences if x.seq_id == sid), None)
         if s is None:
-            return
-        try:
-            features = self.feature_table.to_features()
-        except ValueError as ex:
-            # 解析失败不弹窗打断输入：状态栏提示，保留上次有效结果
-            self.win.log(f"⚠ Invalid edit - not re-validated: {ex}")
-            return
-        issues = validate(s, features, res.detail.mapping, res.detail.ref_features,
+            return True
+        old_issues = [(i.level, i.code, i.message) for i in res.issues]
+        issues = validate(s, res.features, res.detail.mapping, res.detail.ref_features,
                           res.detail.ref_seq, res.detail.preset, self.win.make_config())
-        res.features = features
-        # 重验只替换 validate() 的输出；管线早期/迁移期的提示（base_issues）原样保留
         res.issues = list(res.detail.base_issues) + issues
         res.status = status_of(res.issues)
-        res.tbl_text = tbl_text_from(features, sid)
-        self._populate_variant_table(sid)
-        self._update_issues_hint(sid)
-        self._refresh_seq_row(sid)
+        res.validation_pending = False
+        res.tbl_text = tbl_text_from(res.features, sid)
+        if old_issues != [(i.level, i.code, i.message) for i in res.issues]:
+            self.win.invalidate_result(sid)
+        self._pending.discard((sid, acc))
+        self._drafts.pop((sid, acc), None)
+        return True
+
+    def _auto_revalidate(self):
+        self._reval_timer.stop()
+        for sid, acc in list(self._pending):
+            self._validate_result(sid, acc)
+            self._refresh_seq_row(sid)
+        if self.current:
+            self._populate_variant_table(self.current)
+            self._update_issues_hint(self.current)
         self._update_ribbon()
-        self.win.log(f"[{sid}] Auto re-validated vs {self.viewed_ref}: "
-                     f"status {res.status}, {len(issues)} issue(s)")
+        self.win.update_summary()
+
+    def flush_validation(self, chosen_only=False):
+        """Validate model snapshots before export/save; never read another visible row."""
+        self._auto_revalidate()
+        valid = True
+        for s in self.win.sequences:
+            variants = self._variants(s.seq_id)
+            accs = ([self.win.chosen_accession(s.seq_id)] if chosen_only else list(variants))
+            for acc in accs:
+                valid = self._validate_result(s.seq_id, acc) and valid
+        return valid
+
+    def clear_edits(self):
+        self._reval_timer.stop()
+        self._pending.clear()
+        self._drafts.clear()
 
     def _recheck_all(self):
         """用当前设置重查全部已注释序列的全部 variant（如改了 identity threshold 后）。"""
-        n = 0
-        for s in self.win.sequences:
-            for res in (self.win.results.get(s.seq_id) or {}).values():
-                if res.detail is None:
-                    continue
-                issues = validate(s, res.features, res.detail.mapping,
-                                  res.detail.ref_features, res.detail.ref_seq,
-                                  res.detail.preset, self.win.make_config())
-                res.issues = list(res.detail.base_issues) + issues
-                res.status = status_of(res.issues)
-                res.tbl_text = tbl_text_from(res.features, s.seq_id)
-                n += 1
+        self.flush_validation()
+        n = sum(res.detail is not None for variants in self.win.results.values()
+                for res in variants.values())
         self.refresh()
         if self.current:
             self._update_issues_hint(self.current)

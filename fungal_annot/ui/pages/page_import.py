@@ -190,6 +190,10 @@ class PageImport(QWidget):
         row.addWidget(b_example)
         row.addWidget(b_clear)
         row.addWidget(self.b_stop)
+        b_reference = QPushButton("Use reference")
+        b_reference.setToolTip("Skip BLAST and use an accession or a local GenBank reference")
+        b_reference.clicked.connect(self._use_reference)
+        row.addWidget(b_reference)
         b_help = QPushButton("Help")
         b_help.setToolTip("How to use this page: steps, terms, tips")
         b_help.clicked.connect(lambda: show_page_help("page_import", self))
@@ -281,7 +285,7 @@ class PageImport(QWidget):
         self.b_blast.setToolTip("" if self.b_blast.isEnabled()
                                 else reason.strip() or "not ready")
         self.lbl_hint.setText(reason + "Online BLAST takes ~1-5 min per sequence "
-                                       "(serial, rate-limited queue).")
+                                       "(parallel, rate-limited queue).")
 
     # ---- 序列清单 ----
     def _refresh_seq_table(self):
@@ -357,7 +361,12 @@ class PageImport(QWidget):
                                 "before renaming.")
             self._revert_cell(row, 0, old)
             return
-        self.win.rename_sequence(old, new)
+        try:
+            self.win.rename_sequence(old, new)
+        except ValueError as ex:
+            QMessageBox.warning(self, "Invalid Seq ID", str(ex))
+            self._revert_cell(row, 0, old)
+            return
         self.win.log(f"[{old}] renamed to {new}")
         self.refresh()
 
@@ -384,19 +393,35 @@ class PageImport(QWidget):
             seen.add(s.seq_id)
 
     # ---- BLAST 任务（点击即自动导入框内文本并启动）----
+    def import_pending_sequences(self):
+        """Shared import for BLAST and the direct/offline reference workflow."""
+        if not self.import_box.toPlainText().strip():
+            return bool(self.win.sequences)
+        try:
+            seqs = parse_pasted_input(self.import_box.toPlainText())
+            self._dedupe_ids(seqs)
+        except ValueError as ex:
+            QMessageBox.warning(self, "Invalid input", str(ex))
+            return False
+        for seq in seqs:
+            self.win.add_sequence(seq)
+        self.import_box.clear()
+        return True
+
+    def _use_reference(self):
+        if self.win._blast_pending or self.win._annotate_pending:
+            QMessageBox.warning(self, "Tasks running", "Wait for the current tasks before importing more sequences.")
+            return
+        if self.import_pending_sequences():
+            self.win.reference_mode = True
+            self.win.mark_dirty()
+            self.win.go_page(1)
+
     def _start(self):
         if not self.b_blast.isEnabled():
             return
-        if self.import_box.toPlainText().strip():
-            try:
-                seqs = parse_pasted_input(self.import_box.toPlainText())
-                self._dedupe_ids(seqs)
-            except ValueError as ex:
-                QMessageBox.warning(self, "Invalid input", str(ex))
-                return          # 输入框保留原文，改名/修正后重试
-            for s in seqs:
-                self.win.add_sequence(s)
-            self.import_box.clear()         # textChanged → refresh
+        if not self.import_pending_sequences():
+            return
         # 先置按钮状态再提交：队列可能同步排空（全部已有 hits），
         # 由 on_queue_finished 的刷新决定最终态（见 ledger ruling）
         self.b_blast.setEnabled(False)
@@ -425,6 +450,8 @@ class PageImport(QWidget):
         had_seqs = bool(self.win.sequences)
         self.win.sequences.clear()
         self.win.reset_results()
+        self.win.local_references.clear()
+        self.win.reference_mode = False
         self.import_box.clear()         # textChanged → refresh
         if has_text or had_seqs:
             self.win.log("Cleared the input box and all imported sequences")

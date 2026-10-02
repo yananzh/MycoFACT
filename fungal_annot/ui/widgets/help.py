@@ -23,8 +23,9 @@ YELLOW = "#9a6700"
 RED = "#cf222e"
 
 # 红绿灯状态的配色与动作化文案（第 3/4 页共用；页面代码 import 这两个）
-STATUS_COLOR = {"green": GREEN, "yellow": YELLOW, "red": RED}
-STATUS_MARK = {"green": "✓ Ready", "yellow": "⚠ Warnings", "red": "✗ Needs review"}
+STATUS_COLOR = {"green": GREEN, "yellow": YELLOW, "red": RED, "pending": MUTED}
+STATUS_MARK = {"green": "✓ Ready", "yellow": "⚠ Warnings", "red": "✗ Needs review",
+               "pending": "○ Awaiting validation"}
 STATUS_BG = {"green": "#eaf4ec", "yellow": "#fff3cd", "red": "#ffebe9"}
 
 # "Marker" 列的就地解释（第 1/2/4 页共用）：说明自动判定机制与其影响
@@ -332,11 +333,13 @@ concatenating every record.</p>
 <ol>
 <li><b>Set the output directory</b> and press <b>Export Feature Table</b> - one
 <code>&lt;SeqID&gt;.tbl</code> per annotated sequence plus the combined
-<code>all_features.tbl</code> (overwrites existing files).</li>
+<code>all_features.tbl</code>. Unmodified previous outputs are replaced;
+hand-edited or unmanaged files are preserved, so choose a new folder if needed.</li>
 <li><b>Open output folder</b> shows the results in Explorer.</li>
 <li>Red sequences ask for confirmation at export - review their issues on
 step 3 first, then accept the dialog only knowingly. Accepted reds show
-<b>Red · confirmed</b> in the Status column and won't be asked again.</li>
+<b>Red · confirmed</b> in the Status column. Edits, reference changes, or
+re-annotation require a new confirmation.</li>
 </ol>
 
 <h3>What's next (BankIt)</h3>
@@ -517,6 +520,13 @@ for the online BLAST and reference downloads.</li>
 submissions stay rate-limited.</li>
 </ul>
 
+<h3>Save, resume, and work offline</h3>
+<p><b>Save / Save As</b> stores the project; <b>Open</b> resumes it, including
+unimported text and local references. Restored annotations are read-only until
+re-annotated. <b>Log</b> keeps task messages and failure details.</p>
+<p>On step 1, <b>Use reference</b> skips BLAST. On step 2, use <b>View match</b>
+for accessions or <b>Local GenBank</b> to annotate offline without an NCBI email.</p>
+
 <h3>Review status at a glance</h3>
 {_APP_STATUS}
 <p style="margin-top:6px;">The same colors run through step 3 (list and ribbon),
@@ -532,7 +542,10 @@ are entered there.</p>
 <h3>Good to know</h3>
 <ul>
 <li><b>BLAST again</b> skips sequences with hits; <b>STOP</b> cancels the rest.</li>
-<li><b>Re-export</b> after edits on step 3 - files are overwritten.</li>
+<li><b>Re-export</b> after edits on step 3 - validation completes first. Fix
+invalid cells before export; edits invalidate previous confirmations.</li>
+<li>Keep <code>.mycofact-outputs.json</code> in the output folder; obsolete
+outputs are removed when re-exporting. Manually edited files are preserved.</li>
 <li>Nothing leaves your machine except the sequences sent to NCBI for BLAST.</li>
 </ul>
 {_note("Verify before submitting - annotation transfer is a drafting aid.", "danger")}

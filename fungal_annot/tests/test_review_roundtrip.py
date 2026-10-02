@@ -216,5 +216,5 @@ def test_gui_export_skips_zero_feature_sequence(window, tmp_path,
                                      or QMessageBox.StandardButton.Ok))
     page_export._export()
 
-    assert sorted(p.name for p in out.iterdir()) == ["all_features.tbl", "ok1.tbl"]
+    assert sorted(p.name for p in out.glob("*.tbl")) == ["all_features.tbl", "ok1.tbl"]
     assert shown and "none1" in shown[0]

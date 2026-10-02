@@ -30,12 +30,12 @@ def _in_n_run(seq: str, pos: int, min_run: int = 5) -> bool:
     n = len(seq)
 
     def run_len(idx):
-        l = r = idx
-        while l > 0 and seq[l - 1] == "N":
-            l -= 1
-        while r < n - 1 and seq[r + 1] == "N":
-            r += 1
-        return r - l + 1
+        left = right = idx
+        while left > 0 and seq[left - 1] == "N":
+            left -= 1
+        while right < n - 1 and seq[right + 1] == "N":
+            right += 1
+        return right - left + 1
 
     if seq[pos - 1] == "N":
         return run_len(pos - 1) >= min_run
@@ -82,11 +82,49 @@ def _translate(aa_seq: str, table: int) -> str:
     return str(Seq(trimmed).translate(table=table))
 
 
+def _codon_start(feature):
+    values = feature.qualifiers.get("codon_start", ["1"])
+    try:
+        if len(values) != 1:
+            return None
+        value = int(values[0])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return value if value in (1, 2, 3) else None
+
+
+def refresh_reference_spans(features, mapping, query_len):
+    """Rebuild edited query intervals in reference coordinates, including RC queries.
+
+    ref_key identifies the original feature and is intentionally preserved. A manual
+    feature without that provenance stays explicitly uncheckable.
+    """
+    for feature in features:
+        if feature.ref_key is None:
+            continue
+        for part in feature.parts:
+            part.ref_start = part.ref_end = 0
+            if not (1 <= part.start <= part.end <= query_len):
+                continue
+            low, high = part.start, part.end
+            if mapping.orientation == "reverse":
+                low, high = query_len + 1 - high, query_len + 1 - low
+            spans = []
+            for rs, re_, qs, qe in mapping.blocks:
+                start, end = max(low, qs), min(high, qe)
+                if start <= end:
+                    spans.append((rs + start - qs, rs + end - qs))
+            if spans:
+                part.ref_start = min(s for s, _ in spans)
+                part.ref_end = max(e for _, e in spans)
+
+
 def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
     """返回 issues 列表；状态由 status_of() 汇总。"""
     issues = []
     seq = seq_input.seq
     L = len(seq)
+    refresh_reference_spans(features, mapping, L)
 
     # ---- Seq ID 合法性 ----
     if not SEQID_RE.match(seq_input.seq_id or ""):
@@ -134,6 +172,13 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
         issues.append(Issue("info", "cds_pairing",
                             "Transferred CDS count differs from the reference (some skipped/dropped); pairing by reference coordinates"))
     for f in new_cds:
+        cs = _codon_start(f)
+        if cs is None:
+            issues.append(Issue("error", "codon_start_invalid",
+                                "CDS codon_start must be one integer: 1, 2, or 3"))
+            continue
+        if not f.parts or any(not (1 <= p.start <= p.end <= L) for p in f.parts):
+            continue
         ref_f = _match_ref_cds(f, ref_cds)
         table, conflict, certain = resolve_transl_table(ref_f, preset, cfg.user_transl_table)
         if conflict:
@@ -146,7 +191,6 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
                                 "Transl table undetermined (no reference qualifier, no preset default); translation check skipped"))
         else:
             cds_seq = _spliced_cds(f.parts, f.strand, seq)
-            cs = int(f.qualifiers.get("codon_start", ["1"])[0])
             frame = cds_seq[cs - 1:]
             try:
                 aa = _translate(frame, table)
@@ -180,7 +224,11 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
                 issues.append(Issue("warning", "no_start_codon", "5' end complete but no ATG start codon"))
             # 蛋白回检：与参考蛋白 pairwise identity（§6.6）
             if ref_f is not None and aa:
-                ref_cs = int((ref_f.qualifiers.get("codon_start") or ["1"])[0])
+                ref_cs = _codon_start(ref_f)
+                if ref_cs is None:
+                    issues.append(Issue("warning", "reference_codon_start_invalid",
+                                        "Reference CDS has an invalid codon_start; protein back-check skipped"))
+                    continue
                 try:
                     ref_aa = _translate(
                         _spliced_cds(ref_f.parts, ref_f.strand, ref_seq)[ref_cs - 1:],
@@ -197,6 +245,7 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
     # ---- Nucleotide identity 门禁：非编码用全局，CDS 按 exon 加权（§6.6）----
     if new_cds:
         tot = eq = 0
+        missing_context = False
         for f in new_cds:
             for p in f.parts:
                 if p.ref_start and p.ref_end:
@@ -206,8 +255,10 @@ def validate(seq_input, features, mapping, ref_features, ref_seq, preset, cfg):
                             tot += 1
                             if mapping.ref_seq[pos - 1] == mapping.query_seq[mapping.ref_to_query[pos] - 1]:
                                 eq += 1
+                else:
+                    missing_context = True
         nt = (eq / tot) if tot else None
-        if nt is None:
+        if nt is None or missing_context:
             # 查不了 ≠ 通过：CDS 全无参考坐标（手工新增的行、或溯源丢失）时
             # 门禁无法计算，必须显式提示，不得静默跳过（历史缺陷：编辑后
             # 该门禁消失，低相似序列被误判为绿灯）

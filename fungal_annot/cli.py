@@ -1,12 +1,23 @@
 """命令行入口（M1–M2 交付物）。UI（M3–M5）复用 services/pipeline 同一编排。"""
 import argparse
 import sys
+import math
 
 from Bio import SeqIO
 
 from .core.models import SeqInput
 from .core.presets import load_presets
 from .services.pipeline import PipelineConfig, annotate_sequence, write_outputs
+
+
+def _identity_threshold(value):
+    try:
+        number = float(value)
+        if not math.isfinite(number) or not 0 <= number <= 100:
+            raise ValueError
+    except ValueError as ex:
+        raise argparse.ArgumentTypeError("identity must be a finite percentage between 0 and 100") from ex
+    return number
 
 
 def load_fasta(path: str) -> list[SeqInput]:
@@ -43,7 +54,7 @@ def main(argv=None) -> int:
     r.add_argument("--organism", default="", help="BLAST Entrez query filter (e.g. 'Fusarium')")
     r.add_argument("--db", default="core_nt",
                    help="BLAST database (default core_nt; NCBI has merged nt into core_nt)")
-    r.add_argument("--identity", type=float, default=97.0, help="nucleotide identity threshold (default 97)")
+    r.add_argument("--identity", type=_identity_threshold, default=97.0, help="nucleotide identity threshold (default 97)")
     r.add_argument("--ref-gb", default="", help="offline mode: local reference GenBank file")
     r.add_argument("--accession", default="", help="reference accession directly (skip BLAST)")
     r.add_argument("--no-auto-partial", action="store_true",
@@ -68,8 +79,12 @@ def main(argv=None) -> int:
     )
     ref_text = None
     if args.ref_gb:
-        with open(args.ref_gb, encoding="utf-8") as fh:
-            ref_text = fh.read()
+        try:
+            with open(args.ref_gb, encoding="utf-8") as fh:
+                ref_text = fh.read()
+        except OSError as ex:
+            print(f"Cannot read reference GenBank file: {ex}", file=sys.stderr)
+            return 2
 
     results = []
     for s in seqs:
@@ -83,7 +98,11 @@ def main(argv=None) -> int:
         print(f"  Status: {res.status}"
               + (" (RED - manual confirmation required)" if res.status == "red" else ""))
 
-    written = write_outputs(results, args.out, seqs)
+    try:
+        written = write_outputs(results, args.out, seqs)
+    except (OSError, ValueError) as ex:
+        print(f"Export failed: {ex}", file=sys.stderr)
+        return 2
     print(f"\nOutput directory: {args.out}")
     for w in written:
         print(f"  {w}")

@@ -61,6 +61,8 @@ def _feature_from_dict(d):
 
 
 def _result_to_dict(r) -> dict:
+    if getattr(r, "validation_pending", False) or getattr(r, "edit_error", ""):
+        raise ValueError(f"{r.seq_id}: finish validating annotation edits before saving")
     return {
         "seq_id": r.seq_id,
         "status": r.status,
@@ -95,7 +97,7 @@ def _result_from_dict(r):
 def save_project(path: str, sequences, hits: dict, selected_refs: dict,
                  results: dict, settings: dict | None = None,
                  confirmed: dict | None = None, exported: bool = False,
-                 chosen_ref: dict | None = None) -> None:
+                 chosen_ref: dict | None = None, workspace: dict | None = None) -> None:
     """results 形如 {seq_id: {accession: SeqResult}}；chosen_ref[seq_id] 为采纳导出的
     variant（缺省时取该序列的第一个 variant）。"""
     data = {
@@ -118,6 +120,7 @@ def save_project(path: str, sequences, hits: dict, selected_refs: dict,
         "confirmed": dict(confirmed or {}),
         "exported": bool(exported),
         "settings": settings or {},
+        "workspace": workspace or {},
     }
     tmp = path + ".tmp"
     try:
@@ -144,7 +147,7 @@ def _load_v1_results(data: dict):
     return variants_by_sid, selected_refs
 
 
-def load_project(path: str):
+def load_project(path: str, with_workspace: bool = False):
     """返回 (sequences, hits, selected_refs, results, settings, confirmed,
     exported, chosen_ref)。
 
@@ -185,8 +188,9 @@ def load_project(path: str):
         chosen_ref[sid] = chosen if chosen in variants else (
             next(iter(variants)) if variants else "")
 
-    return (sequences, hits, selected_refs, results, data.get("settings", {}),
-            data.get("confirmed", {}), bool(data.get("exported", False)), chosen_ref)
+    state = (sequences, hits, selected_refs, results, data.get("settings", {}),
+             data.get("confirmed", {}), bool(data.get("exported", False)), chosen_ref)
+    return (*state, data.get("workspace", {})) if with_workspace else state
 
 
 @dataclass

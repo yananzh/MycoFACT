@@ -3,6 +3,7 @@
 """
 import os
 import re
+import math
 from dataclasses import dataclass, field
 
 from Bio.Data.CodonTable import TranslationError
@@ -17,6 +18,7 @@ from ..core.presets import detect_from_titles, get as get_preset
 from ..core.tbl_writer import (has_feature_lines, tbl_text_from, write_combined_tbl,
                                write_fsa, write_report_csv)
 from ..core.validator import status_of, validate
+from .output_store import publish_outputs
 
 
 @dataclass
@@ -33,6 +35,10 @@ class PipelineConfig:
     auto_partial: bool = True
     user_transl_table: int | None = None
     online: bool = True
+
+    def __post_init__(self):
+        if not math.isfinite(self.identity_threshold) or not 0 <= self.identity_threshold <= 100:
+            raise ValueError("Identity threshold must be a finite percentage between 0 and 100")
 
 
 @dataclass
@@ -60,6 +66,8 @@ class SeqResult:
     fsa_text: str = ""
     gene_type: str = ""      # 本结果实际使用的基因类型（显式指定或自动判定）
     detail: AnnotateDetail | None = None
+    validation_pending: bool = False
+    edit_error: str = ""
 
     def report_row(self) -> dict:
         p = self.provenance
@@ -236,11 +244,14 @@ def run_batch(seq_inputs, cfg: PipelineConfig, **kwargs) -> list[SeqResult]:
 # Windows 保留文件名字符——其中 : | 是 GenBank Seq ID 的合法字符（validator 的
 # SEQID_RE 放行），直接用作文件名会在导出时抛 WinError 123
 _WIN_UNSAFE = re.compile(r'[<>:"/\\|?*]')
+_WIN_DEVICES = {"CON", "PRN", "AUX", "NUL"} | {
+    f"{prefix}{n}" for prefix in ("COM", "LPT") for n in range(1, 10)}
 
 
 def _safe_stem(seq_id: str) -> str:
     """Seq ID → 文件名安全主名（Windows 保留字符与首尾点/空格处理）。"""
-    return _WIN_UNSAFE.sub("_", seq_id).strip(". ") or "sequence"
+    stem = _WIN_UNSAFE.sub("_", seq_id).strip(". ") or "sequence"
+    return "sequence_" + stem if stem.split(".", 1)[0].upper() in _WIN_DEVICES else stem
 
 
 def _unique_path(out_dir: str, stem: str, ext: str, used: set[str]) -> str:
@@ -281,14 +292,18 @@ def write_outputs(results: list[SeqResult], out_dir: str,
     提交 BankIt）；没有任何序列产出 feature 时不产出汇总文件。界面导出只要
     .tbl（序列本身已在序列表、验证摘要已在审核页呈现）；with_fsa / with_report
     供 CLI 与测试保留完整产物。
+
+    产物先整批暂存，再通过 .mycofact-outputs.json 清单替换此前未被手工修改的
+    本程序产物；失败/移除序列的旧文件同时清理。无清单的同名文件拒绝覆盖。
     """
-    os.makedirs(out_dir, exist_ok=True)
-    written = []
+    texts = {}
     rows = []
     combined_texts = []
     inputs = {s.seq_id: s for s in (seq_inputs or [])}
     used: set[str] = set()
     for i, r in enumerate(results):
+        if getattr(r, "validation_pending", False) or getattr(r, "edit_error", ""):
+            raise ValueError(f"{r.seq_id}: finish validating annotation edits before export")
         if with_report:
             row = r.report_row()
             s = inputs.get(r.seq_id)
@@ -305,24 +320,21 @@ def write_outputs(results: list[SeqResult], out_dir: str,
             continue
         stem = _safe_stem(stems[i]) if stems and i < len(stems) else _safe_stem(r.seq_id)
         tbl = _unique_path(out_dir, stem, ".tbl", used)
-        with open(tbl, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(body)
-        written.append(tbl)
+        texts[os.path.basename(tbl)] = body
         combined_texts.append(body)
         if with_fsa:
             fsa = _unique_path(out_dir, stem, ".fsa", used)
-            with open(fsa, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(r.fsa_text)
-            written.append(fsa)
+            s = inputs.get(r.seq_id)
+            sequence_text = write_fsa(r.seq_id, s.seq) if s else r.fsa_text
+            if sequence_text:
+                _, _, bases = sequence_text.partition("\n")
+                sequence_text = f">{r.seq_id}\n{bases}"
+            texts[os.path.basename(fsa)] = sequence_text
     if with_combined and combined_texts:
         # 走 _unique_path：序列名恰为 "all_features" 时汇总文件自动改名，不互相覆盖
         combined = _unique_path(out_dir, "all_features", ".tbl", used)
-        with open(combined, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(write_combined_tbl(combined_texts))
-        written.append(combined)
+        texts[os.path.basename(combined)] = write_combined_tbl(combined_texts)
     if with_report:
         report = os.path.join(out_dir, "validation_report.csv")
-        with open(report, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(write_report_csv(rows))
-        written.append(report)
-    return written
+        texts[os.path.basename(report)] = write_report_csv(rows)
+    return publish_outputs(out_dir, texts)

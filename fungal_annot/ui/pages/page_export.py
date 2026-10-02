@@ -105,14 +105,14 @@ class PageExport(QWidget):
             # 绿/黄序列无确认概念，不显示任何确认信息
             status_item = QTableWidgetItem(
                 "✗ Red · confirmed" if res.status == "red"
-                and self.win.confirmed.get(s.seq_id)
+                and self.win.is_confirmed(s.seq_id)
                 else STATUS_MARK.get(res.status, res.status))
             status_item.setForeground(
                 QColor(STATUS_COLOR.get(res.status, "#24292f")))
             if res.status == "red":
                 status_item.setToolTip(
                     "Knowingly accepted at a previous export - further exports "
-                    "will not ask again" if self.win.confirmed.get(s.seq_id)
+                    "will not ask again" if self.win.is_confirmed(s.seq_id)
                     else "Export will ask to confirm this sequence knowingly")
             # Seq ID / Marker / Features / Reference / Region / Orientation 按列布局，
             # Status(2) 带颜色单独填
@@ -133,13 +133,21 @@ class PageExport(QWidget):
                                  "steps 1-3 first")
 
     def _export(self):
+        if self.win._annotate_pending or self.win._blast_pending:
+            QMessageBox.warning(self, "Tasks running", "Wait for the current tasks before exporting.")
+            return
+        if not self.win.page_review.flush_validation(chosen_only=True):
+            QMessageBox.warning(self, "Invalid annotation edits",
+                                "Fix the invalid cells on step 3 before exporting.")
+            return
+        self.refresh()
         # 红灯序列在导出时知情确认（Review 页原 Confirm 按钮已并入本弹窗）；
         # 只看采纳（导出）的 variant，未采纳 variant 供比选，不拦
         red_open = []
         for s in self.win.sequences:
             res = self.win.chosen_result(s.seq_id)
             if res is not None and res.status == "red" \
-                    and not self.win.confirmed.get(s.seq_id):
+                    and not self.win.is_confirmed(s.seq_id):
                 red_open.append(s.seq_id)
         if red_open:
             answer = QMessageBox.question(
@@ -151,7 +159,8 @@ class PageExport(QWidget):
             if answer != QMessageBox.StandardButton.Yes:
                 return
             for sid in red_open:
-                self.win.confirmed[sid] = True
+                self.win.confirmed[sid] = self.win.confirmation_token(sid)
+                self.win.mark_dirty()
                 self.win.log(f"[{sid}] Manually confirmed at export")
             self.refresh()
         if not any(self.win.results.values()):
@@ -180,7 +189,8 @@ class PageExport(QWidget):
                                 f"Could not write to '{out}':\n{ex}")
             return
         self.win.last_export_dir = out
-        self.win.exported = True
+        self.win.exported = bool(written)
+        self.win.mark_dirty()
         self.win.update_summary()
         msg = (f"Wrote {len(written)} .tbl file(s) to:\n{out}\n\n"
                + "\n".join(os.path.basename(w) for w in written))

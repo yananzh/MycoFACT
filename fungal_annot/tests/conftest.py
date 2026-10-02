@@ -50,6 +50,7 @@ def window(qtbot):
     """四页向导主窗口（离屏渲染）。UI 测试共用，避免每个文件各写一份夹具。"""
     from fungal_annot.ui.main_window import MainWindow
     win = MainWindow()
+    win._confirm_discard_changes = lambda: True
     qtbot.addWidget(win)
     yield win
 

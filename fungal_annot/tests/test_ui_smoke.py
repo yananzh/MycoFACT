@@ -63,7 +63,8 @@ def test_icon_toolbar_replaced_by_menu_bar(window):
 
     assert window.findChildren(QToolBar) == []
     actions = window.menuBar().actions()
-    assert [a.text() for a in actions] == ["Settings", "Guide", "About"]
+    assert [a.text() for a in actions] == ["New", "Open", "Save", "Save As",
+                                         "Settings", "Guide", "About", "Log"]
     assert all(a.menu() is None for a in actions)          # 直接动作，无下拉
     assert all(a.shortcut().toString() == "" for a in actions)   # 不注册快捷键
 
@@ -91,7 +92,7 @@ def test_log_dock_removed_status_bar_summarises(window):
 
 def test_step_nav_states_and_locking(window):
     """4 步检查条：步骤1 需序列+hits；其后依次需注释、审核、导出。"""
-    from types import SimpleNamespace
+    from fungal_annot.services.pipeline import SeqResult
 
     from fungal_annot.core.blast_runner import BlastHit
     from fungal_annot.core.models import SeqInput
@@ -115,7 +116,7 @@ def test_step_nav_states_and_locking(window):
     assert window.nav.item(1).toolTip() == ""           # 解锁后提示清空
     assert "annotation" in window.nav.item(2).toolTip()
 
-    window.results["s1"] = {"REF00001.1": SimpleNamespace(status="red")}
+    window.results["s1"] = {"REF00001.1": SeqResult(seq_id="s1", status="red")}
     window._refresh_nav()
     assert not window._step_locked(3)[0]                # 红灯不再锁 Export（确认挪到导出弹窗）
     assert "reviewed" not in window.nav.item(3).toolTip()
@@ -425,7 +426,7 @@ def test_import_page_sequence_list_and_buttons(window):
         ["Seq ID", "Length (bp)", "Marker", "BLAST", ""]
     buttons = page.findChildren(QPushButton)
     assert [b.text() for b in buttons] == ["BLAST", "Browse", "Example", "Clear",
-                                           "STOP", "Help"]
+                                           "STOP", "Use reference", "Help"]
     assert buttons[0].objectName() == "PrimaryButton"      # BLAST 主行动
     assert all(b.objectName() == "" for b in buttons[1:])  # 其余默认描边
     actions = buttons[:5]                                  # 五个动作按钮等宽（Help 除外）
@@ -698,20 +699,19 @@ def test_start_blast_imports_box_and_lists_sequences(window, monkeypatch):
 
 
 def test_rename_sequence_moves_stores_and_result(window):
-    """改名：SeqInput/命中/结果/确认随新名迁移，res.seq_id 同步。"""
-    from types import SimpleNamespace
-
+    """改名同步各数据源，并使旧标识的确认失效。"""
     from fungal_annot.core.models import SeqInput
+    from fungal_annot.services.pipeline import SeqResult
 
     window.add_sequence(SeqInput(seq_id="old", seq="ACGT" * 5))
     window.hits["old"] = []
-    window.results["old"] = {"REF00001.1": SimpleNamespace(seq_id="old", status="green")}
+    window.results["old"] = {"REF00001.1": SeqResult(seq_id="old", status="green")}
     window.confirmed["old"] = True
     window.rename_sequence("old", "new")
     assert window.sequences[0].seq_id == "new"
     assert "new" in window.hits and "old" not in window.hits
     assert window.results["new"]["REF00001.1"].seq_id == "new"
-    assert window.confirmed.get("new") is True
+    assert not window.confirmed.get("new") and "old" not in window.confirmed
 
 
 def test_review_auto_revalidate_on_edit(window, qtbot, ref_record_seq, ref_gb_text):
@@ -902,7 +902,7 @@ def test_export_page_writes_tbl_only(window, tmp_path, ref_record_seq, ref_gb_te
                                      or QMessageBox.StandardButton.Ok))
     page._export()
 
-    files = sorted(p.name for p in out.iterdir())
+    files = sorted(p.name for p in out.glob("*.tbl"))
     assert files == ["all_features.tbl", "e1.tbl"], files
     content = (out / "e1.tbl").read_text(encoding="utf-8")
     assert content.startswith(">Feature e1") and "CDS" in content
@@ -924,7 +924,9 @@ def test_export_confirms_red_sequences(window, tmp_path, ref_record_seq, ref_gb_
                                  source_qualifiers={"organism": "F. t", "country": "China"}))
     window.results["r1"] = {"REF00001.1": annotate_sequence(
         window.sequences[0], window.make_config(), reference_gb_text=ref_gb_text)}
-    window.results["r1"]["REF00001.1"].status = "red"   # 强制红灯走确认分支
+    res = window.results["r1"]["REF00001.1"]
+    res.features[0].parts[0].end = 99999  # real validation failure, also on export re-check
+    window.page_review.flush_validation()
     page = window.page_export
     page.refresh()
     out = tmp_path / "red_confirm"
@@ -949,7 +951,7 @@ def test_export_confirms_red_sequences(window, tmp_path, ref_record_seq, ref_gb_
     monkeypatch.setattr(QMessageBox, "question",
                         staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
     page._export()
-    assert window.confirmed["r1"] is True
+    assert window.is_confirmed("r1")
     assert (out / "r1.tbl").exists()
     assert page.table.item(0, 2).text() == "✗ Red · confirmed"
 
@@ -1299,7 +1301,7 @@ def test_multi_reference_compare_adopt_and_export(qtbot, window, tmp_path,
     out = tmp_path / "out"
     page_export.dir_edit.setText(str(out))
     page_export._export()
-    assert sorted(p.name for p in out.iterdir()) == ["all_features.tbl", "m1.tbl"]
+    assert sorted(p.name for p in out.glob("*.tbl")) == ["all_features.tbl", "m1.tbl"]
     # 导出的是采纳的 variant；汇总只含采纳者（单序列时与 m1.tbl 内容一致）
     exported = (out / "m1.tbl").read_text(encoding="utf-8")
     assert exported == variants[window.chosen_accession("m1")].tbl_text

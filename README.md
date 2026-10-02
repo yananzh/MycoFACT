@@ -63,7 +63,7 @@ threads, so the UI stays responsive.
 - **Multi-gene presets** — the gene type is auto-detected from BLAST hit titles or the
   reference annotation, with a generic preset as fallback.
 - **Three ways to specify the reference** — online BLAST, direct accession input (skips
-  BLAST), or a local reference GenBank file for fully offline runs (CLI only).
+  BLAST), or a local reference GenBank file for fully offline runs (GUI and CLI).
 - **Instant revalidation of edits** — red-flagged items require manual confirmation
   before export.
 
@@ -99,9 +99,20 @@ python main.py
 ```
 
 This opens the four-step wizard described above. Click **Example** on the first page to
-load the built-in demo (`demo/example.fasta`) and explore the wizard; annotation itself
-requires online BLAST or a reference accession (fully offline runs are CLI only, via
-`--ref-gb`).
+load the built-in demo (`demo/example.fasta`). To skip BLAST, click **Use reference**,
+then either enter accessions through **View match**, or click **Local GenBank** on
+step 2 for fully offline annotation. A local reference is applied to all imported
+sequences; per-sequence reference selection can be adjusted before annotation.
+
+Use **Save / Save As** to save a JSON project and **Open** to resume it. The project
+includes imported sequences, unimported text, references, results, confirmations,
+settings, and the task log. Restored annotations are read-only until re-annotated
+because alignment context is not serialized. **Log** retains task messages and
+failure details. Closing or replacing a modified project offers Save / Discard / Cancel.
+
+Edits show **Awaiting validation** until rechecked. Export completes validation first;
+invalid cell syntax must be corrected. Confirmation applies to the adopted result and
+is invalidated by edits, reference changes, re-annotation, or validation changes.
 
 ### Command line
 
@@ -141,6 +152,13 @@ python main.py presets
 | `<SeqID>.tbl` + `<SeqID>.fsa` | Feature table and paired FASTA per sequence |
 | `all_features.tbl` | All annotated records' `>Feature` blocks combined into a single multi-record file, uploadable as a whole to BankIt (omitted when no sequence produced features) |
 | `validation_report.csv` | Overall validation report |
+| `.mycofact-outputs.json` | Internal output manifest; keep it in the output directory, do not upload it to BankIt |
+
+Exports are staged before replacing the previous batch. Re-exporting into the same
+directory updates unchanged files listed in the manifest and removes obsolete outputs,
+including tables for sequences that now fail. Manually modified files and existing
+files without a manifest are preserved: choose a new output directory in that case.
+For output folders created by an earlier version, use a new empty directory.
 
 Sequences for which nothing could be transferred (no feature matched the transfer
 whitelist, or every candidate segment was dropped) are reported as errors and produce

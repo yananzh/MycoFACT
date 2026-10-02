@@ -4,10 +4,11 @@
 清空则回落前 N 推荐命中）。
 注释按（序列 × 参考）成对执行，结果在审核页对比后采纳其一用于导出。"""
 import re
+from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QHeaderView,
-                             QLabel, QListWidget, QListWidgetItem, QPushButton,
+                             QLabel, QListWidget, QListWidgetItem, QPushButton, QFileDialog, QMessageBox,
                              QProgressBar, QTableWidget, QTableWidgetItem,
                              QVBoxLayout, QWidget)
 
@@ -110,6 +111,10 @@ class PageReference(QWidget):
                          "clear a row to fall back to the recommended hits")
         b_acc.clicked.connect(self._enter_accessions)
         btns.addWidget(b_acc)
+        self.b_local = QPushButton("Local GenBank")
+        self.b_local.setToolTip("Use a local reference for annotation without network access")
+        self.b_local.clicked.connect(self._load_local_reference)
+        btns.addWidget(self.b_local)
         self.b_annotate = QPushButton("Start Annotation")
         self.b_annotate.setObjectName("PrimaryButton")
         self.b_annotate.clicked.connect(self._start_annotate)
@@ -143,6 +148,7 @@ class PageReference(QWidget):
             if hits and not self.win.selected_refs.get(s.seq_id):
                 self.win.selected_refs[s.seq_id] = [h.accession for h in hits[:self._default_n()]]
         pending = self.win._annotate_pending > 0
+        self.b_local.setEnabled(not pending)
         ready = (bool(self.win.sequences)
                  and all(self.win.selected_refs.get(s.seq_id) for s in self.win.sequences)
                  and not pending)       # 队列运行中不得重新点亮（防双重提交）
@@ -157,6 +163,8 @@ class PageReference(QWidget):
         self.b_annotate.setToolTip(tip)
         if self.seq_list.count():
             self.seq_list.setCurrentRow(0)
+        else:
+            self.hit_table.setRowCount(0)
 
     def _current_sid(self):
         row = self.seq_list.currentRow()
@@ -198,6 +206,7 @@ class PageReference(QWidget):
         # 按命中排名排序（手填、不在命中列表内的 accession 排在后）
         self.win.selected_refs[sid] = ([a for a in order if a in cur]
                                        + [a for a in cur if a not in order])
+        self.win.mark_dirty()
         self.hit_table.sync_checks(self.win.selected_refs[sid])
         self.b_annotate.setEnabled(self._ready_now())
         if self._ready_now():
@@ -233,6 +242,32 @@ class PageReference(QWidget):
                 self.win.selected_refs[sid] = [h.accession for h in hits[:self._default_n()]]
                 self.win.log(f"[{sid}] references cleared - falls back to "
                              "recommended hits")
+        self.win.mark_dirty()
+        self.refresh()
+
+    def _load_local_reference(self):
+        if self.win._annotate_pending:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Select reference GenBank", "",
+                                             "GenBank (*.gb *.gbk *.genbank);;All files (*)")
+        if not path:
+            return
+        from ...core.gb_fetcher import GbFetchError, parse_gb
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+            record = parse_gb(text)
+        except (OSError, ValueError, GbFetchError) as ex:
+            QMessageBox.warning(self, "Invalid reference", str(ex))
+            return
+        key = f"local:{record.id}"
+        self.win.local_references[key] = text
+        # Loading a file applies it to the batch; per-sequence accession selection
+        # remains available in View match before starting annotation.
+        for seq in self.win.sequences:
+            self.win.selected_refs[seq.seq_id] = [key]
+        self.win.reference_mode = True
+        self.win.mark_dirty()
+        self.win.log(f"Local reference loaded: {record.id} ({len(record.seq)} bp)")
         self.refresh()
 
     # ---- 注释任务 ----

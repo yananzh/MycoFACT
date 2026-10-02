@@ -56,13 +56,12 @@ def tbl_text_from(features, seq_id: str, fallback: str = "") -> str:
     """.tbl 文本的唯一来源：有 feature 时按 feature **现算**。
 
     调用方（导出、项目保存）必须走这里，不得直接读结果对象上缓存的文本——
-    features 与缓存文本是两份数据源，编辑后两者会不一致（导出写出旧表的
-    历史缺陷即源于此）。fallback 仅用于无 feature 的结果（失败态的存量文本，
-    通常为空串）。
+    features 与缓存文本是两份数据源，编辑后两者会不一致。无 feature 时始终
+    返回空文本；fallback 参数仅为兼容旧调用保留，不得恢复已经失效的缓存表。
     """
     if features:
         return write_tbl(features, seq_id)
-    return fallback
+    return ""
 
 
 def has_feature_lines(text: str) -> bool:
